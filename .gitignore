@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files (download via script, don't commit)
+data/
+*.csv
+*.parquet
+*.feather
+*.h5
+*.hdf5
+
+# Model checkpoints
+checkpoints/
+*.pt
+*.pth
+
+# Logs
+logs/
+runs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
