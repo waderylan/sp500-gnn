@@ -314,7 +314,7 @@ def compute_weekly_rv(log_returns: pd.DataFrame) -> pd.DataFrame:
     Compute annualized weekly realized volatility (RV) for each stock.
 
     RV for ISO week W = std(daily log returns in W) * sqrt(252).
-    Weeks with fewer than 5 trading days are dropped.
+    Weeks with fewer than 3 trading days are dropped; all others are included.
 
     Args:
         log_returns: DataFrame of shape (num_trading_days, num_stocks).
@@ -331,18 +331,17 @@ def compute_weekly_rv(log_returns: pd.DataFrame) -> pd.DataFrame:
     # Assign each trading day to its ISO week period (Mon–Sun)
     periods = log_returns.index.to_period("W")
 
-    # Keep only weeks with exactly 5 trading days
+    # Drop weeks with fewer than 3 trading days (e.g. holiday-shortened weeks)
     days_per_week = log_returns.groupby(periods).size()
-    full_weeks = days_per_week[days_per_week == 5].index
+    kept_weeks = days_per_week[days_per_week >= 3].index
 
-    # std() across the 5 daily returns, then annualize
     rv = log_returns.groupby(periods).std() * np.sqrt(252)
-    rv = rv.loc[full_weeks]
+    rv = rv.loc[kept_weeks]
 
     # Label each row by the Monday that starts that ISO week
     rv.index = rv.index.to_timestamp(how="start")
 
-    assert rv.shape[0] > 0, "No full 5-day weeks found in log_returns"
+    assert rv.shape[0] > 0, "No weeks with >= 3 trading days found in log_returns"
     assert rv.shape[1] == log_returns.shape[1], (
         f"Column count changed: {rv.shape[1]} != {log_returns.shape[1]}"
     )
@@ -369,32 +368,82 @@ def make_target(weekly_rv: pd.DataFrame) -> pd.DataFrame:
 
     Target at row T = RV at week T+1. The last row will have NaN target and is dropped.
 
-    Args:
-        weekly_rv: DataFrame of shape (num_weeks, num_stocks).
+    weekly_rv: DataFrame of shape (num_weeks, num_stocks).
+    Returns: DataFrame of shape (num_weeks - 1, num_stocks).
 
-    Returns:
-        DataFrame of shape (num_weeks - 1, num_stocks).
-
-    Lookahead safety: target[T] = rv[T+1] — this is intentional. Features at T must
-    use only data strictly before T, so the shift direction is correct.
+    Lookahead safety: target[T] = rv[T+1] — intentional. Features at T use only data
+    strictly before week T starts, so predicting T+1 RV is the correct direction.
     Shape assertion: result.shape[0] == weekly_rv.shape[0] - 1.
     """
-    raise NotImplementedError
+    features_dir = Path(config.DATA_FEATURES_DIR)
+    features_dir.mkdir(parents=True, exist_ok=True)
+
+    # shift(-1): row T receives the value that was in row T+1; last row becomes NaN
+    target = weekly_rv.shift(-1).iloc[:-1]
+
+    assert target.shape[0] == weekly_rv.shape[0] - 1, (
+        f"Expected {weekly_rv.shape[0] - 1} rows, got {target.shape[0]}"
+    )
+    assert target.shape[1] == weekly_rv.shape[1], (
+        f"Column count changed: {target.shape[1]} != {weekly_rv.shape[1]}"
+    )
+    assert not target.isna().any(axis=None), (
+        "NaN values found in target — check that weekly_rv has no NaN rows"
+    )
+
+    target.to_parquet(features_dir / "target.parquet")
+    print(
+        f"Saved: target.parquet "
+        f"({target.shape[1]} stocks × {target.shape[0]} weeks) → {features_dir}/"
+    )
+    return target
 
 
 def make_splits(index: pd.Index) -> pd.DataFrame:
     """
     Assign each week in `index` to train, val, or test split based on config dates.
 
-    Args:
-        index: DatetimeIndex of weekly RV rows.
+    index: DatetimeIndex of weekly target rows (Monday week-start labels).
+    Returns: DataFrame with columns ['week', 'split'] where split in {'train', 'val', 'test'}.
 
-    Returns:
-        DataFrame with columns ['week', 'split'] where split ∈ {'train', 'val', 'test'}.
+    Boundaries (inclusive):
+        train : index <= TRAIN_END (2022-12-31)
+        val   : TRAIN_END < index <= VAL_END (2023-12-31)
+        test  : VAL_END < index
 
     Shape assertion: result.shape[0] == len(index).
     """
-    raise NotImplementedError
+    features_dir = Path(config.DATA_FEATURES_DIR)
+    features_dir.mkdir(parents=True, exist_ok=True)
+
+    train_end = pd.Timestamp(config.TRAIN_END)
+    val_end = pd.Timestamp(config.VAL_END)
+
+    splits = []
+    for week in index:
+        if week <= train_end:
+            splits.append("train")
+        elif week <= val_end:
+            splits.append("val")
+        else:
+            splits.append("test")
+
+    result = pd.DataFrame({"week": index, "split": splits})
+
+    assert result.shape[0] == len(index), (
+        f"Row count mismatch: {result.shape[0]} != {len(index)}"
+    )
+    assert set(result["split"].unique()).issubset({"train", "val", "test"}), (
+        "Unexpected split label found"
+    )
+
+    counts = result["split"].value_counts()
+    print(f"Split counts — train: {counts.get('train', 0)}, "
+          f"val: {counts.get('val', 0)}, test: {counts.get('test', 0)}")
+
+    result.to_parquet(features_dir / "splits.parquet", index=False)
+    print(f"Saved: splits.parquet → {features_dir}/")
+    return result
 
 
 def download_tbill_rates() -> pd.Series:

@@ -71,8 +71,8 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 1.2 Price download, universe construction → `data/raw/prices.parquet`, `tickers.json`, `sector_history.json` · notebook: run + verify cell, coverage stats, 5-ticker price plot, sector spot-check
 - [x] 1.3 Log returns → `data/raw/log_returns.parquet` · notebook: print mean/std, verify March 2020 spike
 - [x] 1.4 Weekly realized volatility → `data/raw/weekly_rv.parquet` · notebook: print mean RV, verify March 2020 week, plot 5 RV series
-- [ ] 1.5 Target construction + lookahead audit → `data/features/target.parquet` · notebook: written audit trail tracing 5 rows from raw price to target value
-- [ ] 1.6 Train/val/test splits → `data/features/splits.parquet` · notebook: print week counts per split
+- [x] 1.5 Target construction + lookahead audit → `data/features/target.parquet` · notebook: written audit trail tracing 5 rows from raw price to target value
+- [x] 1.6 Train/val/test splits → `data/features/splits.parquet` · notebook: print week counts per split
 
 ### Phase 2 — Feature Engineering (`notebooks/02_features.ipynb`)
 - [ ] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio) · notebook: spot-check values are positive, ratio spikes in volatile regimes
