@@ -13,24 +13,54 @@ import pandas as pd
 import config
 
 
-def compute_har_features(weekly_rv: pd.DataFrame) -> pd.DataFrame:
+def compute_volatility_features(
+    log_returns: pd.DataFrame,
+    weekly_rv: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    Compute HAR-style realized volatility lag features for each stock.
+    Compute rolling realized volatility features at 5, 10, 21, and 63 trading day lookbacks,
+    plus the short/long ratio (rv_5d / rv_63d), aligned to the weekly prediction schedule.
 
-    Features: RV_1w (1-week lag), RV_4w (4-week rolling mean), RV_13w (13-week rolling mean).
-    These correspond to daily, weekly, and monthly components in the HAR-RV literature.
+    For each Monday in weekly_rv.index (week T), the feature value is taken from the last
+    available trading day before that Monday (typically the prior Friday). This is done by
+    reindexing the daily rolling series to the preceding Sunday and forward-filling.
 
-    Args:
-        weekly_rv: DataFrame of shape (num_weeks, num_stocks).
+    log_returns: shape (num_trading_days, num_stocks) -- daily log returns.
+    weekly_rv: shape (num_weeks, num_stocks) -- index is Monday week-start dates.
 
-    Returns:
-        DataFrame of shape (num_weeks, num_stocks * 3) with multi-level column index.
+    Returns: DataFrame of shape (num_weeks, num_stocks * 5) with MultiIndex columns
+             (feature_name, ticker). Feature names: rv_5d, rv_10d, rv_21d, rv_63d, rv_ratio.
 
-    Lookahead safety: each feature at row T uses weekly_rv[T-1], weekly_rv[T-4:T], etc.
-    No window touches row T or later.
-    Shape assertion: result.shape[0] == weekly_rv.shape[0].
+    Lookahead safety: each rolling window of N days ends at Friday_{T-1}, strictly before
+    Monday_T. The ratio uses already-lagged values. No window touches week T or later.
+    Shape assertion: result.shape == (len(weekly_rv), weekly_rv.shape[1] * 5).
     """
-    raise NotImplementedError
+    windows = {"rv_5d": 5, "rv_10d": 10, "rv_21d": 21, "rv_63d": 63}
+
+    # Sundays before each Monday: ffill to these dates grabs the preceding Friday
+    lookup_dates = weekly_rv.index - pd.Timedelta(days=1)
+
+    aligned: dict[str, pd.DataFrame] = {}
+    for name, n in windows.items():
+        daily_rv = log_returns.rolling(n).std() * np.sqrt(252)
+        weekly = daily_rv.reindex(lookup_dates, method="ffill")
+        weekly.index = weekly_rv.index  # relabel Sundays back to Mondays
+        aligned[name] = weekly
+
+    # Short/long ratio: replace zero denominators with NaN to avoid inf
+    rv_ratio = aligned["rv_5d"] / aligned["rv_63d"].replace(0.0, np.nan)
+    aligned["rv_ratio"] = rv_ratio
+
+    result = pd.concat(aligned, axis=1)  # MultiIndex columns: (feature_name, ticker)
+
+    num_weeks = len(weekly_rv)
+    num_stocks = weekly_rv.shape[1]
+    assert result.shape == (num_weeks, num_stocks * 5), (
+        f"compute_volatility_features: expected ({num_weeks}, {num_stocks * 5}), "
+        f"got {result.shape}"
+    )
+
+    return result
 
 
 def compute_momentum_features(log_returns: pd.DataFrame,

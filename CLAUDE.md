@@ -75,7 +75,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 1.6 Train/val/test splits → `data/features/splits.parquet` · notebook: print week counts per split
 
 ### Phase 2 — Feature Engineering (`notebooks/02_features.ipynb`)
-- [ ] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio) · notebook: spot-check values are positive, ratio spikes in volatile regimes
+- [x] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio) · notebook: spot-check values are positive, ratio spikes in volatile regimes
 - [ ] 2.2 Return and volume features · notebook: verify lagging, spot-check volume ratio
 - [ ] 2.3 Stack → winsorize → z-score → `data/features/features.parquet` · notebook: assert mean≈0 / std≈1 at 10 random time steps, feature correlation heatmap
 
