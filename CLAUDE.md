@@ -2,7 +2,6 @@
 
 Research project: GNN-based cross-sectional volatility prediction for S&P 500.
 Target venue: FinML Workshop at NeurIPS 2026.
-Full spec: @docs/project_outline.md
 
 ---
 
@@ -65,14 +64,12 @@ State:
 
 ## Task Checklist
 
-Full task specs in @docs/project_outline.md.
-
 Each task is complete only when: (1) src/ code written, (2) notebook cells filled and runnable, (3) output file(s) saved and verified.
 
 ### Phase 1 — Data Pipeline (`notebooks/01_data.ipynb`)
 - [x] 1.1 Environment setup: directory structure, config.py, deps confirmed
-- [x ] 1.2 Price download, universe construction → `data/raw/prices.parquet`, `tickers.json`, `sector_history.json` · notebook: run + verify cell, coverage stats, 5-ticker price plot, sector spot-check
-- [ ] 1.3 Log returns → `data/raw/log_returns.parquet` · notebook: print mean/std, verify March 2020 spike
+- [x] 1.2 Price download, universe construction → `data/raw/prices.parquet`, `tickers.json`, `sector_history.json` · notebook: run + verify cell, coverage stats, 5-ticker price plot, sector spot-check
+- [x] 1.3 Log returns → `data/raw/log_returns.parquet` · notebook: print mean/std, verify March 2020 spike
 - [ ] 1.4 Weekly realized volatility → `data/raw/weekly_rv.parquet` · notebook: print mean RV, verify March 2020 week, plot 5 RV series
 - [ ] 1.5 Target construction + lookahead audit → `data/features/target.parquet` · notebook: written audit trail tracing 5 rows from raw price to target value
 - [ ] 1.6 Train/val/test splits → `data/features/splits.parquet` · notebook: print week counts per split

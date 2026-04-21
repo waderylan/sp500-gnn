@@ -280,15 +280,33 @@ def compute_log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     """
     Compute daily log returns from adjusted close prices.
 
-    Args:
-        prices: DataFrame of shape (num_trading_days, num_stocks).
+    prices: shape (num_trading_days, num_stocks) — adjusted close prices.
+    Returns: shape (num_trading_days - 1, num_stocks) — first row dropped (no prior day).
 
-    Returns:
-        DataFrame of shape (num_trading_days, num_stocks). First row is NaN and dropped.
-
-    Lookahead safety: each day's return uses only that day and the prior day's price.
+    Lookahead safety: return[t] = log(close[t] / close[t-1]). Uses only current and
+    prior day prices. No rolling window, no forward look.
     """
-    raise NotImplementedError
+    raw_dir = Path(config.DATA_RAW_DIR)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    log_returns = np.log(prices / prices.shift(1)).iloc[1:]
+
+    assert log_returns.shape[0] == prices.shape[0] - 1, (
+        f"Expected {prices.shape[0] - 1} rows, got {log_returns.shape[0]}"
+    )
+    assert log_returns.shape[1] == prices.shape[1], (
+        f"Column count changed: {log_returns.shape[1]} != {prices.shape[1]}"
+    )
+    assert not log_returns.isna().all(axis=0).any(), (
+        "At least one ticker is entirely NaN in log_returns"
+    )
+
+    log_returns.to_parquet(raw_dir / "log_returns.parquet")
+    print(
+        f"Saved: log_returns.parquet "
+        f"({log_returns.shape[1]} stocks × {log_returns.shape[0]} days) → {raw_dir}/"
+    )
+    return log_returns
 
 
 def compute_weekly_rv(log_returns: pd.DataFrame) -> pd.DataFrame:
