@@ -37,10 +37,13 @@ LEARNING_RATE           = 0.001
 EARLY_STOP_PATIENCE     = 10        # epochs without val improvement before stopping
 CHECKPOINT_EVERY_N_EPOCHS = 5
 
-# Paths (relative to project root)
-DATA_RAW_DIR      = "data/raw"
-DATA_FEATURES_DIR = "data/features"
-DATA_GRAPHS_DIR   = "data/graphs"
-DATA_RESULTS_DIR  = "data/results"
-CHECKPOINTS_DIR   = "data/results/checkpoints"
-FIGURES_DIR       = "data/results/figures"
+# Paths — absolute, anchored to the directory containing this file
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).parent
+
+DATA_RAW_DIR      = str(_ROOT / "data/raw")
+DATA_FEATURES_DIR = str(_ROOT / "data/features")
+DATA_GRAPHS_DIR   = str(_ROOT / "data/graphs")
+DATA_RESULTS_DIR  = str(_ROOT / "data/results")
+CHECKPOINTS_DIR   = str(_ROOT / "data/results/checkpoints")
+FIGURES_DIR       = str(_ROOT / "data/results/figures")

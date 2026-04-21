@@ -67,40 +67,42 @@ State:
 
 Full task specs in @docs/project_outline.md.
 
-### Phase 1 — Data Pipeline
+Each task is complete only when: (1) src/ code written, (2) notebook cells filled and runnable, (3) output file(s) saved and verified.
+
+### Phase 1 — Data Pipeline (`notebooks/01_data.ipynb`)
 - [x] 1.1 Environment setup: directory structure, config.py, deps confirmed
-- [ ] 1.2 Price download, universe construction → `data/raw/prices.parquet`, `tickers.json`, `sector_history.json`
-- [ ] 1.3 Log returns → `data/raw/log_returns.parquet`
-- [ ] 1.4 Weekly realized volatility → `data/raw/weekly_rv.parquet`
-- [ ] 1.5 Target construction + lookahead audit → `data/features/target.parquet`
-- [ ] 1.6 Train/val/test splits → `data/features/splits.parquet`
+- [x ] 1.2 Price download, universe construction → `data/raw/prices.parquet`, `tickers.json`, `sector_history.json` · notebook: run + verify cell, coverage stats, 5-ticker price plot, sector spot-check
+- [ ] 1.3 Log returns → `data/raw/log_returns.parquet` · notebook: print mean/std, verify March 2020 spike
+- [ ] 1.4 Weekly realized volatility → `data/raw/weekly_rv.parquet` · notebook: print mean RV, verify March 2020 week, plot 5 RV series
+- [ ] 1.5 Target construction + lookahead audit → `data/features/target.parquet` · notebook: written audit trail tracing 5 rows from raw price to target value
+- [ ] 1.6 Train/val/test splits → `data/features/splits.parquet` · notebook: print week counts per split
 
-### Phase 2 — Feature Engineering
-- [ ] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio)
-- [ ] 2.2 Return and volume features
-- [ ] 2.3 Stack → winsorize → z-score → `data/features/features.parquet`
+### Phase 2 — Feature Engineering (`notebooks/02_features.ipynb`)
+- [ ] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio) · notebook: spot-check values are positive, ratio spikes in volatile regimes
+- [ ] 2.2 Return and volume features · notebook: verify lagging, spot-check volume ratio
+- [ ] 2.3 Stack → winsorize → z-score → `data/features/features.parquet` · notebook: assert mean≈0 / std≈1 at 10 random time steps, feature correlation heatmap
 
-### Phase 3 — Graph Construction
-- [ ] 3.1 Sector graph → `data/graphs/sector_edges_by_year.parquet`
-- [ ] 3.2 Correlation graph builder (`build_correlation_graph()`)
-- [ ] 3.3 Granger causality computation → `data/graphs/granger_pvalues.parquet`, `granger_edges.parquet`
-- [ ] 3.4 SAGEConv directionality verification (assert reversed edges produce different output)
-- [ ] 3.5 Graph stats, visualization → `figures/graph_comparison.png`
+### Phase 3 — Graph Construction (`notebooks/03_graphs.ipynb`)
+- [ ] 3.1 Sector graph → `data/graphs/sector_edges_by_year.parquet` · notebook: networkx plot for 2016 (10 clusters) and 2017 (11 clusters), node counts per sector
+- [ ] 3.2 Correlation graph builder (`build_correlation_graph()`) · notebook: visualize calm/COVID/recent samples, print edge counts
+- [ ] 3.3 Granger causality computation → `data/graphs/granger_pvalues.parquet`, `granger_edges.parquet` · notebook: print edge count, in/out-degree distribution plot
+- [ ] 3.4 SAGEConv directionality verification · notebook: named cell with assert that reversed edges produce different output
+- [ ] 3.5 Graph stats, visualization → `figures/graph_comparison.png` · notebook: density table, side-by-side graph figure saved to disk
 
-### Phase 4 — Model Training
-- [ ] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet`
-- [ ] 4.2 LSTM baseline → `checkpoints/lstm_best.pt`
-- [ ] 4.3 GNN implementation + forward-pass verification on all three graph types
-- [ ] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json`
-- [ ] 4.5 Train GNN-Sector → `gnn_sector_best.pt`
-- [ ] 4.6 Train GNN-Granger → `gnn_granger_best.pt`
-- [ ] 4.7 Validation summary + go/no-go checkpoint → `validation_summary.json`
+### Phase 4 — Model Training (`notebooks/04_models.ipynb`)
+- [ ] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet` · notebook: print val MSE/MAE for both, R² distribution
+- [ ] 4.2 LSTM baseline → `checkpoints/lstm_best.pt` · notebook: plot val loss curve
+- [ ] 4.3 GNN implementation + forward-pass verification on all three graph types · notebook: print output shapes and confirm no NaNs
+- [ ] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json` · notebook: print ablation table
+- [ ] 4.5 Train GNN-Sector → `gnn_sector_best.pt` · notebook: print val MSE vs GNN-Correlation
+- [ ] 4.6 Train GNN-Granger → `gnn_granger_best.pt` · notebook: print val MSE, confirm correction method
+- [ ] 4.7 Validation summary + go/no-go checkpoint → `validation_summary.json` · notebook: print ranked model table, document go/no-go decision
 
 ### Phase 5 — Evaluation
-- [ ] 5.1 Test set ML evaluation (unseal test set) → `test_preds_*.parquet`, `ml_metrics_table.csv`
-- [ ] 5.2 Portfolio backtest + FRED T-bill rates → `portfolio_returns.parquet`, `portfolio_metrics_table.csv`
-- [ ] 5.3 Significance tests (DM + BH FDR + block bootstrap) → `dm_test_results.csv`, `bootstrap_sharpe_ci.csv`, `significance_summary.csv`
-- [ ] 5.4 Figure generation (8 publication figures)
+- [ ] 5.1 Test set ML evaluation (unseal test set) → `test_preds_*.parquet`, `ml_metrics_table.csv` · `notebooks/05_evaluate.ipynb`: display full metrics table
+- [ ] 5.2 Portfolio backtest + FRED T-bill rates → `portfolio_returns.parquet`, `portfolio_metrics_table.csv` · `notebooks/06_portfolio.ipynb`: display portfolio metrics table, cumulative return plot
+- [ ] 5.3 Significance tests (DM + BH FDR + block bootstrap) → `dm_test_results.csv`, `bootstrap_sharpe_ci.csv`, `significance_summary.csv` · `notebooks/07_significance.ipynb`: display significance summary table
+- [ ] 5.4 Figure generation (8 publication figures) · `notebooks/07_significance.ipynb`: confirm all 8 PNGs saved to `data/results/figures/`
 
 ### Phase 6 — Writing
 - [ ] 6.1 Related work section
