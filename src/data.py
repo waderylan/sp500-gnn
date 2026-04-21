@@ -325,7 +325,42 @@ def compute_weekly_rv(log_returns: pd.DataFrame) -> pd.DataFrame:
     Lookahead safety: RV for week W uses only data from within week W — no forward look.
     Shape assertion: result.shape == (num_weeks, num_stocks).
     """
-    raise NotImplementedError
+    raw_dir = Path(config.DATA_RAW_DIR)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # Assign each trading day to its ISO week period (Mon–Sun)
+    periods = log_returns.index.to_period("W")
+
+    # Keep only weeks with exactly 5 trading days
+    days_per_week = log_returns.groupby(periods).size()
+    full_weeks = days_per_week[days_per_week == 5].index
+
+    # std() across the 5 daily returns, then annualize
+    rv = log_returns.groupby(periods).std() * np.sqrt(252)
+    rv = rv.loc[full_weeks]
+
+    # Label each row by the Monday that starts that ISO week
+    rv.index = rv.index.to_timestamp(how="start")
+
+    assert rv.shape[0] > 0, "No full 5-day weeks found in log_returns"
+    assert rv.shape[1] == log_returns.shape[1], (
+        f"Column count changed: {rv.shape[1]} != {log_returns.shape[1]}"
+    )
+    assert not rv.isna().all(axis=1).any(), (
+        "At least one week is entirely NaN across all stocks"
+    )
+
+    mean_rv = float(rv.mean().mean())
+    assert 0.10 <= mean_rv <= 0.50, (
+        f"Mean annualized RV {mean_rv:.3f} outside expected range [0.10, 0.50]"
+    )
+
+    rv.to_parquet(raw_dir / "weekly_rv.parquet")
+    print(
+        f"Saved: weekly_rv.parquet "
+        f"({rv.shape[1]} stocks × {rv.shape[0]} weeks) → {raw_dir}/"
+    )
+    return rv
 
 
 def make_target(weekly_rv: pd.DataFrame) -> pd.DataFrame:
