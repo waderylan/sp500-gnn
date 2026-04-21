@@ -2,7 +2,7 @@
 
 Research project: GNN-based cross-sectional volatility prediction for S&P 500.
 Target venue: FinML Workshop at NeurIPS 2026.
-Full project spec: project_plan.md
+Full spec: @docs/project_outline.md
 
 ---
 
@@ -11,81 +11,27 @@ Full project spec: project_plan.md
 - Python 3.10, PyTorch 2.4, PyTorch Geometric, statsmodels, sklearn, yfinance
 - Google Colab A100 GPU. All data persisted to Google Drive.
 - pandas-datareader for FRED T-bill rates
-- All dependencies listed in requirements.txt
-
----
-
-## Repository Layout
-
-```
-sp500-gnn/
-├── config.py                  # Single source of truth for ALL constants
-├── src/
-│   ├── data.py                # Price download, log returns, weekly RV, splits
-│   ├── features.py            # Feature engineering, winsorization, z-scoring
-│   ├── graphs.py              # Three graph constructors + make_pyg_data()
-│   ├── models.py              # HAR (per-stock + pooled), LSTM, GNN classes
-│   ├── train.py               # Training loops for LSTM and GNN
-│   ├── evaluate.py            # MSE, MAE, R², sector breakdowns
-│   ├── portfolio.py           # Inverse-vol portfolio, rebalancing, Sharpe
-│   └── significance.py        # DM test, block bootstrap, FDR correction
-├── docs/
-│   └── project_outline.md     # Full spec — reference with @docs/project_outline.md
-├── data/
-│   ├── raw/                   # prices.parquet, log_returns.parquet, weekly_rv.parquet
-│   ├── features/              # features.parquet, target.parquet, splits.parquet
-│   ├── graphs/                # sector_edges_by_year.parquet, granger_*.parquet, corr_sample/
-│   └── results/               # checkpoints/, figures/, *.csv, *.json
-└── notebooks/
-    ├── 01_data.ipynb
-    ├── 02_features.ipynb
-    ├── 03_graphs.ipynb
-    ├── 04_models.ipynb
-    ├── 05_evaluate.ipynb
-    ├── 06_portfolio.ipynb
-    └── 07_significance.ipynb
-```
 
 ---
 
 ## Non-Negotiable Rules
 
-These apply to every file you touch. Do not proceed without confirming them.
-
 ### 1. config.py is the only place constants live
 Never hardcode a number, date, path, or threshold anywhere in src/ or notebooks.
-Every magic number belongs in config.py. If a constant doesn't exist yet, add it there first, then reference it.
+If a constant doesn't exist yet, add it to config.py first, then reference it.
 
-Key constants already defined:
-- RANDOM_SEED = 42
-- TRAIN_END = "2022-12-31"
-- VAL_END = "2023-12-31"
-- TEST_END = "2025-12-31"
-- MIN_COVERAGE = 0.95
-- WINSORIZE_CLIP = (0.01, 0.99)
-- MAX_WEIGHT = 0.05
-- CORR_THRESHOLD = 0.5
-- CORR_LOOKBACK_DAYS = 252
-- GRANGER_LAG = 5
-- SAGE_FLOW = "source_to_target"
-- HIDDEN_DIM = 64
-- DROPOUT = 0.3
-- LEARNING_RATE = 0.001
-- EARLY_STOP_PATIENCE = 10
-- CHECKPOINT_EVERY_N_EPOCHS = 5
-- TRANSACTION_COST_BPS = 10
+`DEV_UNIVERSE_SIZE = 50` limits the ticker universe for fast iteration and debugging. Set to `None` to use the full universe. Every function that loads tickers must respect this: slice the ticker list to `tickers[:config.DEV_UNIVERSE_SIZE]` if it is not `None`.
 
 ### 2. No logic in notebooks
-Notebooks call src/ functions and display results. They do not contain loops, model definitions, or data transformations. If a notebook cell has more than ~5 lines of computation, it belongs in src/.
+Notebooks call src/ functions and display results only. If a cell has more than ~5 lines of computation, it belongs in src/.
 
 ### 3. Lookahead bias is the critical failure mode
 Before writing or modifying any feature or target computation, state explicitly which dates are used and confirm they are strictly prior to the prediction week start. The target for week T is RV from week T+1 — the shift goes forward, not backward. Any rolling window for a feature at week T must end before week T begins.
 
 ### 4. The test set is sealed
-Do not write any code that reads from data/results/test_preds_*.parquet or generates test-period predictions until Task 5.1 is explicitly reached. If asked to evaluate on test data before that point, refuse and explain why.
+Do not write any code that reads from data/results/test_preds_*.parquet or generates test-period predictions until Task 5.1 is explicitly reached.
 
-### 5. Random seeds must be set before any model initialization
-At the top of any script or notebook cell that initializes a model or runs training:
+### 5. Random seeds before any model initialization
 ```python
 import random, numpy as np, torch
 random.seed(config.RANDOM_SEED)
@@ -95,16 +41,15 @@ torch.cuda.manual_seed_all(config.RANDOM_SEED)
 ```
 
 ### 6. Fail loudly on shape mismatches
-Every function that produces a tensor or dataframe must assert its output shape before returning. Silent shape errors are the second most common source of bugs after lookahead bias.
+Every function that produces a tensor or dataframe must assert its output shape before returning.
 
 ---
 
 ## Code Style
 
-- All src/ functions have typed signatures and a one-paragraph docstring covering: what it does, inputs, outputs, and any lookahead-safety notes
+- All src/ functions have typed signatures and a docstring covering: what it does, inputs, outputs, and any lookahead-safety notes
 - No classes in src/ unless state is genuinely needed. Prefer plain functions.
 - Parquet over CSV for all data artifacts
-- When in doubt, explain your reasoning before writing code — especially for anything that touches dates, rolling windows, or train/val/test indexing
 
 ---
 
@@ -115,3 +60,52 @@ State:
 2. What config.py constants it uses
 3. Whether it touches any date-indexed data — if yes, confirm the lookahead safety of every window
 4. What shape assertions will be added to the output
+
+---
+
+## Task Checklist
+
+Full task specs in @docs/project_outline.md.
+
+### Phase 1 — Data Pipeline
+- [x] 1.1 Environment setup: directory structure, config.py, deps confirmed
+- [ ] 1.2 Price download, universe construction → `data/raw/prices.parquet`, `tickers.json`, `sector_history.json`
+- [ ] 1.3 Log returns → `data/raw/log_returns.parquet`
+- [ ] 1.4 Weekly realized volatility → `data/raw/weekly_rv.parquet`
+- [ ] 1.5 Target construction + lookahead audit → `data/features/target.parquet`
+- [ ] 1.6 Train/val/test splits → `data/features/splits.parquet`
+
+### Phase 2 — Feature Engineering
+- [ ] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio)
+- [ ] 2.2 Return and volume features
+- [ ] 2.3 Stack → winsorize → z-score → `data/features/features.parquet`
+
+### Phase 3 — Graph Construction
+- [ ] 3.1 Sector graph → `data/graphs/sector_edges_by_year.parquet`
+- [ ] 3.2 Correlation graph builder (`build_correlation_graph()`)
+- [ ] 3.3 Granger causality computation → `data/graphs/granger_pvalues.parquet`, `granger_edges.parquet`
+- [ ] 3.4 SAGEConv directionality verification (assert reversed edges produce different output)
+- [ ] 3.5 Graph stats, visualization → `figures/graph_comparison.png`
+
+### Phase 4 — Model Training
+- [ ] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet`
+- [ ] 4.2 LSTM baseline → `checkpoints/lstm_best.pt`
+- [ ] 4.3 GNN implementation + forward-pass verification on all three graph types
+- [ ] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json`
+- [ ] 4.5 Train GNN-Sector → `gnn_sector_best.pt`
+- [ ] 4.6 Train GNN-Granger → `gnn_granger_best.pt`
+- [ ] 4.7 Validation summary + go/no-go checkpoint → `validation_summary.json`
+
+### Phase 5 — Evaluation
+- [ ] 5.1 Test set ML evaluation (unseal test set) → `test_preds_*.parquet`, `ml_metrics_table.csv`
+- [ ] 5.2 Portfolio backtest + FRED T-bill rates → `portfolio_returns.parquet`, `portfolio_metrics_table.csv`
+- [ ] 5.3 Significance tests (DM + BH FDR + block bootstrap) → `dm_test_results.csv`, `bootstrap_sharpe_ci.csv`, `significance_summary.csv`
+- [ ] 5.4 Figure generation (8 publication figures)
+
+### Phase 6 — Writing
+- [ ] 6.1 Related work section
+- [ ] 6.2 Methodology section
+- [ ] 6.3 Experiments section
+- [ ] 6.4 Introduction and abstract
+- [ ] 6.5 Conclusion, limitations, future work
+- [ ] 6.6 Revision, LaTeX compilation, arXiv submission
