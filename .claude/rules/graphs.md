@@ -22,9 +22,9 @@ def build_correlation_graph(log_returns: pd.DataFrame, date: pd.Timestamp,
     """
     Build undirected correlation graph for a given date.
     
-    Lookahead safety: window ends AT `date` (inclusive). The function is called
-    with `date` = last trading day before the prediction week starts, so no
-    future data enters.
+    Lookahead safety: 1-step-ahead design. Window ends AT `date` (inclusive).
+    Pass `date` = last trading day of week T (Friday of week T).
+    Target is week T+1's RV (starts Monday_{T+1}). Friday_T < Monday_{T+1}.
     
     Returns edge_index of shape (2, num_edges) as LongTensor.
     Both directions included (undirected: if A->B then B->A).

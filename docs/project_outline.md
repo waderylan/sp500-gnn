@@ -85,7 +85,7 @@ The prediction target for week T is RV computed from week T+1 — strictly futur
 
 ## 2. Feature Engineering
 
-All features are computed per stock per week using only data available prior to the start of that prediction week. Every rolling window ends at least one trading day before the prediction date.
+This project uses **1-step-ahead prediction**: features at row T are computed from data through the end of week T (Friday of week T), and the target is week T+1's RV. Friday of week T is strictly before Monday of week T+1, so no lookahead is introduced. Every rolling window ends no later than the last trading day of week T.
 
 ### Volatility Features
 
@@ -118,7 +118,7 @@ Three distinct graphs are constructed from the same underlying data. Each feeds 
 
 ### Graph 1: Correlation Graph (Dynamic, Undirected)
 
-At each weekly time step, a rolling 252-trading-day window of daily log returns is used to compute the pairwise Pearson correlation matrix across all stocks. An edge is drawn between two stocks if their correlation exceeds a threshold θ. Self-loops are excluded. The graph is recomputed each week as the rolling window advances, making it dynamic — the graph structure changes over time in response to evolving market relationships.
+At each weekly time step, a rolling 252-trading-day window of daily log returns ending on Friday of week T is used to compute the pairwise Pearson correlation matrix across all stocks. An edge is drawn between two stocks if their correlation exceeds a threshold θ. Self-loops are excluded. The graph is recomputed each week as the rolling window advances, making it dynamic — the graph structure changes over time in response to evolving market relationships.
 
 - Lookback window: 252 trading days (1 year)
 - Threshold θ: tuned on validation set across {0.3, 0.5, 0.7}

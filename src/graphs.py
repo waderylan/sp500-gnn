@@ -40,15 +40,16 @@ def build_correlation_graph(log_returns: pd.DataFrame,
     Both directions included (A->B and B->A). Self-loops excluded.
 
     log_returns: Daily log returns, shape (num_trading_days, num_stocks).
-    date: Last trading day before the prediction week starts (inclusive end of window).
+    date: Last trading day of the current week T (Friday of week T). The prediction
+          target is week T+1's RV, so Friday_T is strictly before the target period.
     lookback: Number of trading days in the rolling window.
     threshold: Absolute Pearson correlation threshold for edge inclusion.
 
     Returns edge_index of shape (2, num_edges) as LongTensor.
     Returns (2, 0) tensor if no pairs exceed the threshold.
 
-    Lookahead safety: window ends AT `date`, which must be the last trading day
-    before the prediction week. No data from the prediction week is used.
+    Lookahead safety: 1-step-ahead design. Window ends AT `date` (Friday of week T).
+    Target is week T+1's RV (starts Monday_{T+1}). Friday_T < Monday_{T+1}.
     Shape assertions: edge_index.shape[0] == 2, edge_index.max() < num_stocks when edges > 0.
     """
     num_stocks = log_returns.shape[1]

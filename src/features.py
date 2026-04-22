@@ -31,20 +31,23 @@ def compute_volatility_features(
     Returns: DataFrame of shape (num_weeks, num_stocks * 5) with MultiIndex columns
              (feature_name, ticker). Feature names: rv_5d, rv_10d, rv_21d, rv_63d, rv_ratio.
 
-    Lookahead safety: each rolling window of N days ends at Friday_{T-1}, strictly before
-    Monday_T. The ratio uses already-lagged values. No window touches week T or later.
+    Lookahead safety: 1-step-ahead design. Each rolling window of N days ends at
+    Friday_T (last trading day of week T). The target is week T+1's RV, which starts
+    Monday_{T+1}. Friday_T is strictly before Monday_{T+1}.
     Shape assertion: result.shape == (len(weekly_rv), weekly_rv.shape[1] * 5).
     """
     windows = {"rv_5d": 5, "rv_10d": 10, "rv_21d": 21, "rv_63d": 63}
 
-    # Sundays before each Monday: ffill to these dates grabs the preceding Friday
-    lookup_dates = weekly_rv.index - pd.Timedelta(days=1)
+    # Fridays of each week: ffill to these dates grabs the last trading day of
+    # week T (Friday, or Thursday if Friday is a holiday). This is 1-step-ahead:
+    # features at row T include week T's own data, predicting week T+1's RV.
+    lookup_dates = weekly_rv.index + pd.Timedelta(days=4)
 
     aligned: dict[str, pd.DataFrame] = {}
     for name, n in windows.items():
         daily_rv = log_returns.rolling(n).std() * np.sqrt(252)
         weekly = daily_rv.reindex(lookup_dates, method="ffill")
-        weekly.index = weekly_rv.index  # relabel Sundays back to Mondays
+        weekly.index = weekly_rv.index  # relabel Fridays back to Mondays
         aligned[name] = weekly
 
     # Short/long ratio: replace zero denominators with NaN to avoid inf
@@ -89,10 +92,13 @@ def compute_return_volume_features(
     Returns: DataFrame of shape (num_weeks, num_stocks * 5) with MultiIndex columns
              (feature_name, ticker).
 
-    Lookahead safety: all rolling windows end at Friday_{T-1}, strictly before Monday_T.
+    Lookahead safety: 1-step-ahead design. All rolling windows end at Friday_T (last
+    trading day of week T). The target is week T+1's RV. Friday_T is strictly before
+    Monday_{T+1}.
     Shape assertion: result.shape == (len(weekly_rv), weekly_rv.shape[1] * 5).
     """
-    lookup_dates = weekly_rv.index - pd.Timedelta(days=1)  # Sundays before each Monday
+    # Fridays of each week — 1-step-ahead: include week T's own data.
+    lookup_dates = weekly_rv.index + pd.Timedelta(days=4)
 
     def _align(daily: pd.DataFrame) -> pd.DataFrame:
         weekly = daily.reindex(lookup_dates, method="ffill")

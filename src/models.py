@@ -7,6 +7,8 @@ The graph is passed at forward time, not stored in the model.
 
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch_geometric.nn import SAGEConv
@@ -14,6 +16,120 @@ from sklearn.linear_model import LinearRegression
 
 import config
 
+
+# ---------------------------------------------------------------------------
+# HAR feature helpers
+# ---------------------------------------------------------------------------
+
+def compute_har_features(
+    weekly_rv: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Compute HAR-RV input features from weekly realized volatility.
+
+    Forward-fills isolated NaN gaps along the time axis before computing rolling
+    windows. ffill at time T uses the last known value from at or before T,
+    so this is lookahead-safe.
+
+    This is a 1-step-ahead setup: features at row T include week T's own RV
+    (and rolling means ending at T). The target is week T+1's RV. Week T's RV
+    is fully observed by Friday of week T, strictly before week T+1 begins.
+
+    weekly_rv: shape (num_weeks, num_stocks), Monday-indexed weekly RV.
+    Returns: (rv_1w, rv_4w, rv_13w), each shape (num_weeks, num_stocks).
+
+    Lookahead safety: at row T, rv_1w = weekly_rv[T]; rv_4w = mean of weeks T-3
+    to T; rv_13w = mean of weeks T-12 to T. All data through Friday of week T.
+    First 12 rows are NaN (rv_13w needs 13 weeks of history).
+    """
+    rv = weekly_rv.ffill()
+
+    rv_1w  = rv
+    rv_4w  = rv.rolling(4).mean()
+    rv_13w = rv.rolling(13).mean()
+
+    assert rv_1w.shape  == weekly_rv.shape, f"rv_1w shape mismatch: {rv_1w.shape}"
+    assert rv_4w.shape  == weekly_rv.shape, f"rv_4w shape mismatch: {rv_4w.shape}"
+    assert rv_13w.shape == weekly_rv.shape, f"rv_13w shape mismatch: {rv_13w.shape}"
+
+    return rv_1w, rv_4w, rv_13w
+
+
+def prepare_har_arrays(
+    rv_1w: pd.DataFrame,
+    rv_4w: pd.DataFrame,
+    rv_13w: pd.DataFrame,
+    target: pd.DataFrame,
+    splits: pd.DataFrame,
+    split_name: str,
+) -> tuple[dict, dict, np.ndarray, np.ndarray, pd.DatetimeIndex]:
+    """
+    Align HAR features to target's index, drop NaN weeks, and filter to one split.
+
+    The first 13 rows of rv_13w are NaN (insufficient rolling history) and are dropped.
+    Pooled arrays stack over (week, stock) in row-major order: week 0 all stocks,
+    week 1 all stocks, etc. — matching the reshape used to recover predictions.
+
+    rv_1w, rv_4w, rv_13w: DataFrames of shape (num_weeks, num_stocks).
+    target: DataFrame of shape (num_target_weeks, num_stocks), Monday week-start index.
+    splits: DataFrame with columns ['week', 'split'].
+    split_name: one of 'train', 'val', 'test'.
+
+    Returns:
+        X_dict:      {ticker: ndarray(num_valid_weeks, 3)} for HARModel.
+        y_dict:      {ticker: ndarray(num_valid_weeks,)} for HARModel.
+        X_pooled:    ndarray(num_valid_weeks * num_stocks, 3) for HARPooled.
+        y_pooled:    ndarray(num_valid_weeks * num_stocks,) for HARPooled.
+        valid_index: DatetimeIndex of weeks included (use to reconstruct DataFrames).
+    """
+    # Align feature rows to target index (weekly_rv has one extra row at the end)
+    rv_1w  = rv_1w.loc[target.index]
+    rv_4w  = rv_4w.loc[target.index]
+    rv_13w = rv_13w.loc[target.index]
+
+    # Weeks belonging to the requested split
+    split_weeks = set(splits.loc[splits["split"] == split_name, "week"])
+    split_index = target.index[target.index.isin(split_weeks)]
+
+    # Drop weeks where any stock has NaN rv_13w (the first ~13 weeks of the dataset)
+    valid_mask  = rv_13w.loc[split_index].notna().all(axis=1)
+    valid_index = split_index[valid_mask]
+
+    X_1w  = rv_1w.loc[valid_index].values    # (num_valid_weeks, num_stocks)
+    X_4w  = rv_4w.loc[valid_index].values
+    X_13w = rv_13w.loc[valid_index].values
+    Y     = target.loc[valid_index].values    # (num_valid_weeks, num_stocks)
+
+    tickers         = list(target.columns)
+    num_valid_weeks = len(valid_index)
+    num_stocks      = len(tickers)
+
+    # Per-ticker dicts for HARModel
+    X_dict: dict[str, np.ndarray] = {
+        ticker: np.column_stack([X_1w[:, i], X_4w[:, i], X_13w[:, i]])
+        for i, ticker in enumerate(tickers)
+    }
+    y_dict: dict[str, np.ndarray] = {
+        ticker: Y[:, i] for i, ticker in enumerate(tickers)
+    }
+
+    # Pooled arrays (week-major flatten: all stocks for week 0, then week 1, ...)
+    X_pooled = np.column_stack([X_1w.reshape(-1), X_4w.reshape(-1), X_13w.reshape(-1)])
+    y_pooled = Y.reshape(-1)
+
+    assert X_pooled.shape == (num_valid_weeks * num_stocks, 3), (
+        f"X_pooled shape mismatch: {X_pooled.shape}"
+    )
+    assert y_pooled.shape == (num_valid_weeks * num_stocks,), (
+        f"y_pooled shape mismatch: {y_pooled.shape}"
+    )
+
+    return X_dict, y_dict, X_pooled, y_pooled, valid_index
+
+
+# ---------------------------------------------------------------------------
+# HAR model classes
+# ---------------------------------------------------------------------------
 
 class HARModel:
     """
@@ -23,24 +139,37 @@ class HARModel:
     HAR uses only RV features computed directly from weekly_rv — NOT from features.parquet.
     """
 
-    def fit(self, X: dict[str, object], y: dict[str, object]) -> None:
+    def __init__(self) -> None:
+        self._models: dict[str, LinearRegression] = {}
+
+    def fit(self, X: dict[str, np.ndarray], y: dict[str, np.ndarray]) -> None:
         """
         Fit one LinearRegression per ticker.
 
-        Args:
-            X: Dict mapping ticker -> ndarray of shape (num_train_weeks, 3).
-            y: Dict mapping ticker -> ndarray of shape (num_train_weeks,).
+        X: {ticker: ndarray(num_train_weeks, 3)}
+        y: {ticker: ndarray(num_train_weeks,)}
         """
-        raise NotImplementedError
+        for ticker, X_tick in X.items():
+            model = LinearRegression()
+            model.fit(X_tick, y[ticker])
+            self._models[ticker] = model
 
-    def predict(self, X: dict[str, object]) -> dict[str, object]:
+    def predict(self, X: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """
         Predict for each ticker.
 
-        Returns:
-            Dict mapping ticker -> ndarray of shape (num_weeks,).
+        X: {ticker: ndarray(num_weeks, 3)}
+        Returns: {ticker: ndarray(num_weeks,)}
         """
-        raise NotImplementedError
+        preds: dict[str, np.ndarray] = {}
+        for ticker, X_tick in X.items():
+            assert ticker in self._models, f"No model fitted for ticker: {ticker}"
+            pred = self._models[ticker].predict(X_tick)
+            assert pred.shape == (X_tick.shape[0],), (
+                f"{ticker}: prediction shape {pred.shape} != ({X_tick.shape[0]},)"
+            )
+            preds[ticker] = pred
+        return preds
 
 
 class HARPooled:
@@ -50,21 +179,40 @@ class HARPooled:
     Input features: RV_1w, RV_4w, RV_13w (same as HARModel but pooled).
     """
 
-    def fit(self, X: object, y: object) -> None:
-        """
-        Args:
-            X: ndarray of shape (num_train_weeks * num_stocks, 3).
-            y: ndarray of shape (num_train_weeks * num_stocks,).
-        """
-        raise NotImplementedError
+    def __init__(self) -> None:
+        self._model: LinearRegression = LinearRegression()
 
-    def predict(self, X: object) -> object:
+    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         """
-        Returns:
-            ndarray of shape (num_weeks * num_stocks,).
+        X: ndarray(num_train_weeks * num_stocks, 3)
+        y: ndarray(num_train_weeks * num_stocks,)
         """
-        raise NotImplementedError
+        assert X.ndim == 2 and X.shape[1] == 3, (
+            f"Expected X shape (N, 3), got {X.shape}"
+        )
+        assert y.ndim == 1 and y.shape[0] == X.shape[0], (
+            f"y shape {y.shape} does not match X rows {X.shape[0]}"
+        )
+        self._model.fit(X, y)
 
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """
+        X: ndarray(num_weeks * num_stocks, 3)
+        Returns: ndarray(num_weeks * num_stocks,)
+        """
+        assert X.ndim == 2 and X.shape[1] == 3, (
+            f"Expected X shape (N, 3), got {X.shape}"
+        )
+        preds = self._model.predict(X)
+        assert preds.shape == (X.shape[0],), (
+            f"Prediction shape {preds.shape} != ({X.shape[0]},)"
+        )
+        return preds
+
+
+# ---------------------------------------------------------------------------
+# LSTM and GNN (stubs — implemented in Tasks 4.2 and 4.3)
+# ---------------------------------------------------------------------------
 
 class LSTMModel(nn.Module):
     """
@@ -83,11 +231,8 @@ class LSTMModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            x: Tensor of shape (num_stocks, seq_len, input_size).
-
-        Returns:
-            Tensor of shape (num_stocks,).
+        x: Tensor of shape (num_stocks, seq_len, input_size).
+        Returns: Tensor of shape (num_stocks,).
         """
         raise NotImplementedError
 
@@ -115,11 +260,8 @@ class GNNModel(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.LongTensor) -> torch.Tensor:
         """
-        Args:
-            x: Node features, shape (num_stocks, in_channels).
-            edge_index: Graph connectivity, shape (2, num_edges).
-
-        Returns:
-            Tensor of shape (num_stocks,).
+        x: Node features, shape (num_stocks, in_channels).
+        edge_index: Graph connectivity, shape (2, num_edges).
+        Returns: Tensor of shape (num_stocks,).
         """
         raise NotImplementedError

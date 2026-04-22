@@ -25,7 +25,11 @@ If a constant doesn't exist yet, add it to config.py first, then reference it.
 Notebooks call src/ functions and display results only. If a cell has more than ~5 lines of computation, it belongs in src/.
 
 ### 3. Lookahead bias is the critical failure mode
-Before writing or modifying any feature or target computation, state explicitly which dates are used and confirm they are strictly prior to the prediction week start. The target for week T is RV from week T+1 — the shift goes forward, not backward. Any rolling window for a feature at week T must end before week T begins.
+Before writing or modifying any feature or target computation, state explicitly which dates are used and confirm they are available before the predicted week begins. The target for week T is RV from week T+1 — the shift goes forward, not backward.
+
+**This project uses 1-step-ahead prediction.** Features at row T may use data through the end of week T (Friday of week T). The predicted week is T+1, which starts Monday_{T+1}. Friday_T is strictly before Monday_{T+1}, so this is lookahead-free.
+
+Do not use any data from week T+1 or later in features at row T.
 
 ### 4. The test set is sealed
 Do not write any code that reads from data/results/test_preds_*.parquet or generates test-period predictions until Task 5.1 is explicitly reached.
@@ -87,7 +91,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 3.5 Graph stats, visualization → `figures/graph_comparison.png` · notebook: density table, side-by-side graph figure saved to disk
 
 ### Phase 4 — Model Training (`notebooks/04_models.ipynb`)
-- [ ] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet` · notebook: print val MSE/MAE for both, R² distribution
+- [x] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet` · notebook: print val MSE/MAE for both, R² distribution
 - [ ] 4.2 LSTM baseline → `checkpoints/lstm_best.pt` · notebook: plot val loss curve
 - [ ] 4.3 GNN implementation + forward-pass verification on all three graph types · notebook: print output shapes and confirm no NaNs
 - [ ] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json` · notebook: print ablation table

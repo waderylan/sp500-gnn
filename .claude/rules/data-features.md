@@ -9,13 +9,15 @@ Loaded when working in the data pipeline or feature engineering modules.
 Every function in these files must pass this checklist before being considered complete.
 State the answers explicitly in a comment at the top of each function.
 
-1. **What is the prediction week T?** (the week whose target we are predicting)
+1. **What is the prediction week T?** (the row index; target is T+1's RV)
 2. **What data does this function use?** (date range, columns)
-3. **Does any window extend into or past week T?** (must be NO)
-4. **Where does the rolling window end relative to week T?** (must end before week T starts)
+3. **Does any window extend into week T+1 or later?** (must be NO)
+4. **Where does the rolling window end relative to the target week?** (must end no later than Friday of week T)
 
-The target shift: `target.parquet` stores RV for week T+1 at row index T.
-This means when building features for row T, you may only use data from before week T.
+**1-step-ahead design:** `target.parquet` stores RV for week T+1 at row index T.
+Features at row T may include data through Friday of week T (the last trading day
+of week T). Friday_T is strictly before Monday_{T+1} (the start of the predicted week).
+Do NOT use any data from week T+1 or later.
 
 ---
 
