@@ -26,6 +26,13 @@ TRANSACTION_COST_BPS = 10            # one-way cost in basis points
 CORR_THRESHOLD    = 0.5             # edge threshold θ (tuned on val; ablation: {0.3, 0.5, 0.7})
 CORR_LOOKBACK_DAYS = 252            # rolling lookback window for correlation graph
 
+# Three sample dates for correlation graph visualization (all in train or val)
+CORR_SAMPLE_DATES = {
+    "calm":   "2017-06-30",   # low-vol summer 2017 (train)
+    "covid":  "2020-03-13",   # last Friday before worst COVID week (train)
+    "recent": "2023-06-30",   # mid-val period (val)
+}
+
 # Graph construction — Granger
 GRANGER_LAG        = 5              # number of lags for Granger causality F-test
 GRANGER_CORRECTION = "bonferroni"   # "bonferroni" or "bh"; updated after ablation

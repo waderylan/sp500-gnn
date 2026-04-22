@@ -24,21 +24,88 @@ def build_correlation_graph(log_returns: pd.DataFrame,
 
     Computes pairwise Pearson correlations over the `lookback` trading days ending
     at `date` (inclusive). Adds an edge between stock i and j if |corr(i,j)| >= threshold.
-    Both directions included (A→B and B→A). Self-loops excluded.
+    Both directions included (A->B and B->A). Self-loops excluded.
 
-    Args:
-        log_returns: Daily log returns, shape (num_trading_days, num_stocks).
-        date: Last trading day before the prediction week starts (inclusive end of window).
-        lookback: Number of trading days to look back.
-        threshold: Absolute correlation threshold for edge inclusion.
+    log_returns: Daily log returns, shape (num_trading_days, num_stocks).
+    date: Last trading day before the prediction week starts (inclusive end of window).
+    lookback: Number of trading days in the rolling window.
+    threshold: Absolute Pearson correlation threshold for edge inclusion.
 
-    Returns:
-        edge_index: LongTensor of shape (2, num_edges).
+    Returns edge_index of shape (2, num_edges) as LongTensor.
+    Returns (2, 0) tensor if no pairs exceed the threshold.
 
-    Lookahead safety: window ends AT `date`, which is before the prediction week starts.
-    Shape assertion: edge_index.shape[0] == 2.
+    Lookahead safety: window ends AT `date`, which must be the last trading day
+    before the prediction week. No data from the prediction week is used.
+    Shape assertions: edge_index.shape[0] == 2, edge_index.max() < num_stocks when edges > 0.
     """
-    raise NotImplementedError
+    num_stocks = log_returns.shape[1]
+
+    # Last `lookback` rows up to and including `date`
+    window = log_returns.loc[:date].iloc[-lookback:]
+
+    # pandas .corr() uses pairwise deletion -- NaN pairs produce NaN, which
+    # fails the >= threshold check and are simply skipped (no edge added)
+    corr = window.corr().values  # shape (num_stocks, num_stocks)
+
+    # Upper triangle only (k=1 excludes diagonal); NaN comparisons return False
+    mask = np.triu(np.abs(corr) >= threshold, k=1)
+    rows, cols = np.where(mask)
+
+    if len(rows) > 0:
+        src = np.concatenate([rows, cols]).astype(np.int64)
+        dst = np.concatenate([cols, rows]).astype(np.int64)
+    else:
+        src = np.empty(0, dtype=np.int64)
+        dst = np.empty(0, dtype=np.int64)
+
+    edge_index = torch.tensor(np.stack([src, dst]), dtype=torch.long)
+
+    assert edge_index.shape[0] == 2, \
+        f"edge_index row dim should be 2, got {edge_index.shape[0]}"
+    if edge_index.shape[1] > 0:
+        assert int(edge_index.max()) < num_stocks, \
+            f"edge_index max {int(edge_index.max())} >= num_stocks {num_stocks}"
+
+    return edge_index
+
+
+def save_correlation_samples(log_returns: pd.DataFrame,
+                              tickers: list[str]) -> dict[str, torch.LongTensor]:
+    """
+    Build and save correlation graphs for the three sample dates in config.CORR_SAMPLE_DATES.
+
+    Saves each edge list as a parquet to data/graphs/corr_sample/corr_{label}.parquet.
+    Prints edge count for each sample date.
+
+    log_returns: Daily log returns, shape (num_trading_days, num_stocks).
+    tickers: Ordered ticker list (used for column count verification only).
+
+    Returns dict mapping label -> edge_index LongTensor.
+    """
+    import os
+
+    out_dir = os.path.join(config.DATA_GRAPHS_DIR, "corr_sample")
+    os.makedirs(out_dir, exist_ok=True)
+
+    graphs: dict[str, torch.LongTensor] = {}
+    for label, date_str in config.CORR_SAMPLE_DATES.items():
+        date = pd.Timestamp(date_str)
+        edge_index = build_correlation_graph(log_returns, date)
+        num_edges = edge_index.shape[1]
+        unique_pairs = num_edges // 2
+
+        df = pd.DataFrame({
+            "src": edge_index[0].numpy().astype("int32"),
+            "dst": edge_index[1].numpy().astype("int32"),
+        })
+        out_path = os.path.join(out_dir, f"corr_{label}.parquet")
+        df.to_parquet(out_path, index=False)
+
+        graphs[label] = edge_index
+        print(f"  {label:8s} ({date_str}): {num_edges:6d} directed edges  "
+              f"({unique_pairs:5d} unique pairs)")
+
+    return graphs
 
 
 def build_sector_graph(tickers: list[str],
