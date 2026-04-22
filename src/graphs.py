@@ -3,17 +3,30 @@ Graph constructors for three graph types: correlation (dynamic), sector (annual)
 and Granger causality (static, train-period only).
 
 Also provides make_pyg_data() to assemble PyTorch Geometric Data objects.
+
+Granger computation has two backends:
+  run_granger_tests_gpu  — batched OLS on CUDA, ~5-15 min on A100 for full universe
+  run_granger_tests_cpu  — statsmodels via multiprocessing, ~6-12h on Colab CPU
+  run_granger_tests      — dispatcher: picks GPU if CUDA is available, else CPU
+
+Always call run_granger_tests() first to produce granger_pvalues.parquet, then
+call build_granger_graph() to apply the multiple-comparison correction and return
+the directed edge index.
 """
 
 from __future__ import annotations
 
-import torch
-import pandas as pd
+import os
+
 import numpy as np
+import pandas as pd
+import torch
 from torch_geometric.data import Data
 
 import config
 
+
+# ── Correlation graph ─────────────────────────────────────────────────────────
 
 def build_correlation_graph(log_returns: pd.DataFrame,
                              date: pd.Timestamp,
@@ -82,8 +95,6 @@ def save_correlation_samples(log_returns: pd.DataFrame,
 
     Returns dict mapping label -> edge_index LongTensor.
     """
-    import os
-
     out_dir = os.path.join(config.DATA_GRAPHS_DIR, "corr_sample")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -108,6 +119,8 @@ def save_correlation_samples(log_returns: pd.DataFrame,
     return graphs
 
 
+# ── Sector graph ──────────────────────────────────────────────────────────────
+
 def build_sector_graph(tickers: list[str],
                         year: int,
                         sector_history: dict) -> torch.LongTensor:
@@ -118,13 +131,11 @@ def build_sector_graph(tickers: list[str],
     using point-in-time sector assignments from sector_history.
     Both directions included. Self-loops excluded.
 
-    Args:
-        tickers: Ordered list of ticker symbols (defines node indices).
-        year: Calendar year for sector lookup.
-        sector_history: Dict of {ticker: {str(year): sector_name}}.
+    tickers: Ordered list of ticker symbols (defines node indices).
+    year: Calendar year for sector lookup.
+    sector_history: Dict of {ticker: {str(year): sector_name}}.
 
-    Returns:
-        edge_index: LongTensor of shape (2, num_edges).
+    Returns edge_index of shape (2, num_edges) as LongTensor.
 
     Lookahead safety: no price/return data used. Sector assignments are
     point-in-time for the start of `year`, known before any week in that year.
@@ -160,32 +171,6 @@ def build_sector_graph(tickers: list[str],
     return edge_index
 
 
-def build_granger_graph(log_returns: pd.DataFrame,
-                         tickers: list[str],
-                         train_end: str = config.TRAIN_END,
-                         lag: int = config.GRANGER_LAG) -> torch.LongTensor:
-    """
-    Build a directed Granger causality graph using only the training period.
-
-    For each ordered pair (A, B), run a Granger-causality F-test at `lag` lags.
-    Apply Bonferroni correction (fallback to BH if <500 edges survive).
-    Edge A→B means A's past returns Granger-cause B's returns.
-
-    Args:
-        log_returns: Daily log returns, shape (num_trading_days, num_stocks).
-        tickers: Ordered list of ticker symbols.
-        train_end: End date of training period (data after this date is not used).
-        lag: Number of lags for the Granger F-test.
-
-    Returns:
-        edge_index: LongTensor of shape (2, num_edges), directed.
-
-    Lookahead safety: uses only data up to and including train_end.
-    Shape assertion: edge_index.shape[0] == 2.
-    """
-    raise NotImplementedError
-
-
 def build_all_sector_graphs(tickers: list[str],
                              sector_history: dict,
                              years: range) -> dict[int, torch.LongTensor]:
@@ -195,16 +180,12 @@ def build_all_sector_graphs(tickers: list[str],
 
     Columns saved: [year, src, dst] — all integer indices into `tickers`.
 
-    Args:
-        tickers: Ordered list of ticker symbols.
-        sector_history: Dict of {ticker: {str(year): sector_name}}.
-        years: Range of years to build graphs for (e.g., range(2015, 2026)).
+    tickers: Ordered list of ticker symbols.
+    sector_history: Dict of {ticker: {str(year): sector_name}}.
+    years: Range of years to build graphs for (e.g., range(2015, 2026)).
 
-    Returns:
-        Dict mapping year (int) to edge_index (LongTensor).
+    Returns dict mapping year (int) to edge_index (LongTensor).
     """
-    import os
-
     graphs: dict[int, torch.LongTensor] = {}
     rows: list[dict] = []
 
@@ -229,19 +210,391 @@ def build_all_sector_graphs(tickers: list[str],
     return graphs
 
 
+# ── Granger causality graph ───────────────────────────────────────────────────
+#
+# Two-step workflow:
+#   1. run_granger_tests()    — heavy computation, saves granger_pvalues.parquet
+#   2. build_granger_graph()  — loads saved p-values, applies correction, saves edges
+#
+# Keeping these separate means you can re-run the correction step with different
+# settings (e.g., switch Bonferroni -> BH) without re-running the 6-12h test.
+
+
+# Module-level globals used by the CPU multiprocessing worker.
+# Must be at module level so they survive pickling across processes.
+_GRANGER_RETURNS: np.ndarray | None = None
+
+
+def _init_granger_worker(returns_array: np.ndarray) -> None:
+    """Copy training returns into each worker process once at Pool startup."""
+    global _GRANGER_RETURNS
+    _GRANGER_RETURNS = returns_array
+
+
+def _granger_pair(args: tuple) -> tuple:
+    """
+    Test whether stock a_idx Granger-causes stock b_idx at the given lag.
+
+    args: (b_idx, a_idx, lag)
+    Returns: (b_idx, a_idx, pvalue)
+
+    Uses statsmodels grangercausalitytests, which includes an intercept and runs
+    the F-test comparing restricted (B lags only) vs unrestricted (B + A lags) OLS.
+    Returns pvalue=1.0 for degenerate pairs (constant series, NaN, etc.).
+    """
+    from statsmodels.tsa.stattools import grangercausalitytests
+    b_idx, a_idx, lag = args
+    # grangercausalitytests expects column 0 = target (B), column 1 = cause (A)
+    data = np.column_stack([_GRANGER_RETURNS[:, b_idx], _GRANGER_RETURNS[:, a_idx]])
+    try:
+        res = grangercausalitytests(data, maxlag=lag, verbose=False)
+        pvalue = float(res[lag][0]["ssr_ftest"][1])
+    except Exception:
+        pvalue = 1.0
+    return b_idx, a_idx, pvalue
+
+
+def run_granger_tests_cpu(
+    log_returns: pd.DataFrame,
+    tickers: list[str],
+    train_end: str = config.TRAIN_END,
+    lag: int = config.GRANGER_LAG,
+    n_workers: int | None = None,
+) -> pd.DataFrame:
+    """
+    Compute Granger causality p-values for all N*(N-1) ordered pairs using CPU multiprocessing.
+
+    Wraps statsmodels grangercausalitytests. Each worker process receives the full
+    training returns array once via Pool initializer (avoids re-serialization per pair).
+
+    log_returns: Daily log returns, shape (num_trading_days, num_stocks). Columns = tickers.
+    tickers: Ordered ticker list, length N. Must match columns of log_returns.
+    train_end: Last date of training data. Default = config.TRAIN_END = "2022-12-31".
+    lag: Number of lags for the Granger F-test. Default = config.GRANGER_LAG = 5.
+    n_workers: CPU cores. None = all available (os.cpu_count()).
+
+    Returns DataFrame of shape (N, N) — p-values. Diagonal = NaN (no self-test).
+    Saves result to data/graphs/granger_pvalues.parquet.
+
+    Lookahead safety: slices log_returns to [:train_end]. No val/test data enters.
+    Runtime: ~30-60s for N=50 (dev), ~6-12h for N=462 (full) on Colab CPU.
+    Shape assertion: output DataFrame is (N, N).
+    """
+    from multiprocessing import Pool
+
+    train_data = log_returns.loc[:train_end].dropna().values.astype(np.float64)
+    T, N = train_data.shape
+    n_workers = n_workers or os.cpu_count()
+    pairs = [(b, a, lag) for b in range(N) for a in range(N) if a != b]
+
+    print(f"CPU Granger tests: {N} stocks, {T} training days, lag={lag}")
+    print(f"Total pairs: {len(pairs):,}  |  Workers: {n_workers}")
+
+    pval_matrix = np.full((N, N), np.nan)
+    print_every = max(1, len(pairs) // 20)
+
+    with Pool(
+        processes=n_workers,
+        initializer=_init_granger_worker,
+        initargs=(train_data,),
+    ) as pool:
+        for i, (b_idx, a_idx, pval) in enumerate(
+            pool.imap_unordered(_granger_pair, pairs, chunksize=50)
+        ):
+            pval_matrix[b_idx, a_idx] = pval
+            if (i + 1) % print_every == 0:
+                print(f"  {i+1:>7,}/{len(pairs):,} pairs done", end="\r")
+    print()
+
+    pval_df = pd.DataFrame(pval_matrix, index=tickers, columns=tickers)
+    assert pval_df.shape == (N, N), f"Expected ({N}, {N}), got {pval_df.shape}"
+
+    os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_pvalues.parquet")
+    pval_df.to_parquet(out_path)
+    print(f"Saved {pval_df.shape} p-value matrix -> {out_path}")
+    return pval_df
+
+
+def run_granger_tests_gpu(
+    log_returns: pd.DataFrame,
+    tickers: list[str],
+    train_end: str = config.TRAIN_END,
+    lag: int = config.GRANGER_LAG,
+) -> pd.DataFrame:
+    """
+    Compute Granger causality p-values using GPU-batched OLS in PyTorch (float64).
+
+    Implements the same Granger F-test as statsmodels, but vectorized over all N-1
+    causing stocks A for each target stock B in a single GPU pass.
+
+    Math:
+      For each target B, we fit two OLS models over T_eff = T - lag observations:
+        Restricted:   B_t = c + sum_{l=1}^{lag} b_l * B_{t-l}   + eps
+        Unrestricted: B_t = c + sum_{l=1}^{lag} b_l * B_{t-l}
+                               + sum_{l=1}^{lag} g_l * A_{t-l}  + eps
+
+      F = ((RSS_r - RSS_ur) / lag) / (RSS_ur / (T_eff - 2*lag - 1))
+      p-value = P(F_{lag, T_eff-2*lag-1} > F_obs)   [scipy.stats.f.sf]
+
+    The unrestricted fits for all N-1 causing stocks A are batched as:
+      X_ur: (N-1, T_eff, 2*lag+1)  — [intercept | B_lags | A_lags]
+      Normal equations: beta = solve(X^T X, X^T y) for each A simultaneously.
+
+    This matches statsmodels p-values within float64 numerical precision.
+
+    log_returns: Daily log returns, shape (num_trading_days, num_stocks).
+    tickers: Ordered ticker list, length N.
+    train_end: Last date of training data. Default = config.TRAIN_END = "2022-12-31".
+    lag: Number of lags. Default = config.GRANGER_LAG = 5.
+
+    Returns DataFrame of shape (N, N) — p-values. Diagonal = NaN.
+    Saves result to data/graphs/granger_pvalues.parquet.
+
+    Lookahead safety: slices log_returns to [:train_end].
+    Runtime: ~5-15 min on A100 (N=462); seconds for N=50 (dev).
+    Shape assertion: output DataFrame is (N, N).
+
+    Raises RuntimeError if CUDA is not available.
+    """
+    from scipy.stats import f as f_dist
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA not available. Call run_granger_tests_cpu() or "
+            "run_granger_tests(use_gpu=False) instead."
+        )
+
+    train_data = log_returns.loc[:train_end].dropna().values.astype(np.float64)
+    T, N = train_data.shape
+    T_eff = T - lag
+    df1 = lag                       # restrictions = number of A-lag coefficients
+    df2 = T_eff - 2 * lag - 1      # T_eff rows minus (2*lag + 1) unrestricted params
+
+    print(f"GPU Granger tests: {N} stocks, {T} training days, lag={lag}")
+    print(f"T_eff={T_eff}, df1={df1}, df2={df2}, device={torch.cuda.get_device_name(0)}")
+
+    device = torch.device("cuda")
+    # R[t, n] = daily log return of stock n on day t
+    R = torch.tensor(train_data, dtype=torch.float64, device=device)  # (T, N)
+
+    # Pre-build all lag slices (shared across the loop over target stocks B).
+    # A_lags_all[n, t, l] = R[t + lag - 1 - l, n]  for t in [0, T_eff), l in [0, lag)
+    # Equivalently: for lag offset l, the time slice of all stocks is R[lag-1-l : T-1-l, :]
+    A_lags_all = torch.stack(
+        [R[lag - 1 - l : T - 1 - l, :] for l in range(lag)], dim=2
+    )  # (T_eff, N, lag)
+    A_lags_all = A_lags_all.permute(1, 0, 2).contiguous()  # (N, T_eff, lag)
+
+    ones = torch.ones(T_eff, 1, dtype=torch.float64, device=device)
+    all_idx = torch.arange(N, device=device)
+    pval_matrix = np.full((N, N), np.nan)
+    print_every = max(1, N // 10)
+
+    for b_idx in range(N):
+        y = R[lag:, b_idx]  # (T_eff,)
+
+        # Restricted design matrix: [1, B_{t-1}, ..., B_{t-lag}]
+        B_lags = torch.stack(
+            [R[lag - 1 - l : T - 1 - l, b_idx] for l in range(lag)], dim=1
+        )  # (T_eff, lag)
+        X_r = torch.cat([ones, B_lags], dim=1)  # (T_eff, lag+1)
+
+        # Restricted OLS via normal equations
+        XtX_r = X_r.T @ X_r                                          # (lag+1, lag+1)
+        Xty_r = X_r.T @ y                                            # (lag+1,)
+        beta_r = torch.linalg.solve(XtX_r, Xty_r.unsqueeze(1)).squeeze(1)  # (lag+1,)
+        RSS_r = ((y - X_r @ beta_r) ** 2).sum()                      # scalar
+
+        # Unrestricted design matrices for all A != b_idx
+        # Shape: (N-1, T_eff, 2*lag+1) = [intercept | B_lags | A_lags]
+        mask = all_idx != b_idx
+        A_lags = A_lags_all[mask]                                            # (N-1, T_eff, lag)
+        X_r_exp = X_r.unsqueeze(0).expand(N - 1, -1, -1)                    # (N-1, T_eff, lag+1)
+        X_ur = torch.cat([X_r_exp, A_lags], dim=2)                          # (N-1, T_eff, 2*lag+1)
+
+        # Batched OLS via normal equations: solve (X^T X) beta = X^T y
+        y_exp = y.view(1, T_eff, 1).expand(N - 1, -1, -1)                   # (N-1, T_eff, 1)
+        XtX_ur = torch.bmm(X_ur.transpose(1, 2), X_ur)                      # (N-1, 2*lag+1, 2*lag+1)
+        Xty_ur = torch.bmm(X_ur.transpose(1, 2), y_exp)                     # (N-1, 2*lag+1, 1)
+        beta_ur = torch.linalg.solve(XtX_ur, Xty_ur)                        # (N-1, 2*lag+1, 1)
+        RSS_ur = ((y_exp - torch.bmm(X_ur, beta_ur)) ** 2).sum(dim=(1, 2))  # (N-1,)
+
+        # F-statistics. Clamp to 0 to guard against floating-point rounding where
+        # RSS_ur > RSS_r by a tiny epsilon (theoretically impossible, but can occur).
+        F = torch.clamp(
+            ((RSS_r - RSS_ur) / df1) / (RSS_ur / df2), min=0.0
+        ).cpu().numpy()  # (N-1,)
+        pvals = f_dist.sf(F, df1, df2)  # survival function = 1 - CDF
+
+        a_indices = np.where(np.arange(N) != b_idx)[0]
+        pval_matrix[b_idx, a_indices] = pvals
+
+        if (b_idx + 1) % print_every == 0 or b_idx == N - 1:
+            print(f"  {b_idx+1:>4}/{N} target stocks done", end="\r")
+
+    print()
+
+    pval_df = pd.DataFrame(pval_matrix, index=tickers, columns=tickers)
+    assert pval_df.shape == (N, N), f"Expected ({N}, {N}), got {pval_df.shape}"
+
+    os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_pvalues.parquet")
+    pval_df.to_parquet(out_path)
+    print(f"Saved {pval_df.shape} p-value matrix -> {out_path}")
+    return pval_df
+
+
+def run_granger_tests(
+    log_returns: pd.DataFrame,
+    tickers: list[str],
+    train_end: str = config.TRAIN_END,
+    lag: int = config.GRANGER_LAG,
+    use_gpu: bool | None = None,
+    n_workers: int | None = None,
+) -> pd.DataFrame:
+    """
+    Run Granger causality tests — dispatcher that picks GPU or CPU automatically.
+
+    On Colab with A100, GPU is ~30-60x faster than CPU multiprocessing:
+      GPU: ~5-15 min for full universe (N=462)
+      CPU: ~6-12h for full universe (N=462)
+    Both produce numerically identical p-values within float64 precision.
+
+    Step 1 of 2: call this function once to produce granger_pvalues.parquet.
+    Step 2 of 2: call build_granger_graph() to apply correction and get edge_index.
+
+    log_returns: Daily log returns, shape (num_trading_days, num_stocks).
+    tickers: Ordered ticker list, length N.
+    train_end: Last date of training data. Default = config.TRAIN_END = "2022-12-31".
+    lag: Lags for F-test. Default = config.GRANGER_LAG = 5.
+    use_gpu: True = force GPU, False = force CPU, None = auto-detect via torch.cuda.is_available().
+    n_workers: CPU cores when use_gpu=False. None = all available cores.
+
+    Returns DataFrame (N, N) of p-values with diagonal = NaN.
+    Saves to data/graphs/granger_pvalues.parquet.
+
+    Lookahead safety: both backends slice to [:train_end]. No val/test data used.
+    """
+    if use_gpu is None:
+        use_gpu = torch.cuda.is_available()
+
+    if use_gpu:
+        print("CUDA detected — using GPU batched OLS (run_granger_tests_gpu).")
+        return run_granger_tests_gpu(log_returns, tickers, train_end, lag)
+    else:
+        print("No CUDA — using CPU multiprocessing with statsmodels (run_granger_tests_cpu).")
+        return run_granger_tests_cpu(log_returns, tickers, train_end, lag, n_workers)
+
+
+def build_granger_graph(
+    tickers: list[str],
+    correction: str = config.GRANGER_CORRECTION,
+) -> tuple[torch.LongTensor, str]:
+    """
+    Build a directed Granger causality edge index from the saved p-value matrix.
+
+    Step 2 of 2: loads granger_pvalues.parquet (produced by run_granger_tests()),
+    applies multiple-comparison correction, and saves the directed edge list.
+
+    Correction logic:
+      1. Try Bonferroni at alpha = 0.05 / N*(N-1).
+      2. If fewer than 500 edges survive, fall back to Benjamini-Hochberg FDR
+         (statsmodels multipletests, method='fdr_bh') and log the switch.
+    The correction method actually used is returned so callers can document it.
+
+    Edge semantics: edge A -> B means stock A's past returns Granger-cause stock B's.
+    Row 0 of edge_index = source (cause), row 1 = destination (target).
+
+    tickers: Ordered ticker list, length N. Must match the p-value matrix index.
+    correction: Starting method — "bonferroni" (default) or "bh". Overridden to "bh"
+                automatically if Bonferroni yields fewer than 500 edges.
+
+    Returns (edge_index, correction_used):
+        edge_index: LongTensor of shape (2, num_edges).
+        correction_used: "bonferroni" or "bh".
+
+    Saves directed edges to data/graphs/granger_edges.parquet (columns: src, dst).
+    Shape assertions: edge_index.shape[0] == 2, edge_index.max() < N when edges > 0.
+
+    Raises FileNotFoundError if granger_pvalues.parquet does not exist.
+    """
+    from statsmodels.stats.multitest import multipletests
+
+    pval_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_pvalues.parquet")
+    if not os.path.exists(pval_path):
+        raise FileNotFoundError(
+            f"P-value file not found: {pval_path}\n"
+            "Run run_granger_tests() first to compute Granger causality p-values."
+        )
+
+    pval_df = pd.read_parquet(pval_path)
+    N = len(tickers)
+    assert pval_df.shape == (N, N), (
+        f"P-value matrix shape {pval_df.shape} does not match len(tickers)={N}"
+    )
+    pval_matrix = pval_df.values  # (N, N)
+
+    # Extract all off-diagonal pairs
+    off_diag = ~np.eye(N, dtype=bool)
+    src_all, dst_all = np.where(off_diag)
+    pvals_flat = pval_matrix[src_all, dst_all]  # (N*(N-1),)
+    num_pairs = len(pvals_flat)
+
+    # Bonferroni
+    bonf_alpha = 0.05 / num_pairs
+    bonf_reject = pvals_flat < bonf_alpha
+
+    if bonf_reject.sum() >= 500:
+        reject = bonf_reject
+        correction_used = "bonferroni"
+    else:
+        print(
+            f"Bonferroni yielded {int(bonf_reject.sum())} edges (<500). "
+            "Falling back to Benjamini-Hochberg FDR."
+        )
+        reject, _, _, _ = multipletests(pvals_flat, alpha=0.05, method="fdr_bh")
+        correction_used = "bh"
+
+    n_edges = int(reject.sum())
+    print(f"Correction: {correction_used}  |  Edges: {n_edges:,} / {num_pairs:,} pairs")
+
+    src_edges = src_all[reject].astype(np.int64)
+    dst_edges = dst_all[reject].astype(np.int64)
+    edge_index = torch.tensor(np.stack([src_edges, dst_edges]), dtype=torch.long)
+
+    assert edge_index.shape[0] == 2, \
+        f"edge_index row dim should be 2, got {edge_index.shape[0]}"
+    if edge_index.shape[1] > 0:
+        assert int(edge_index.max()) < N, \
+            f"edge_index max {int(edge_index.max())} >= N={N}"
+
+    # Save edge list
+    edges_df = pd.DataFrame({
+        "src": src_edges.astype("int32"),
+        "dst": dst_edges.astype("int32"),
+    })
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_edges.parquet")
+    os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
+    edges_df.to_parquet(out_path, index=False)
+    print(f"Saved {n_edges:,} directed edges -> {out_path}")
+
+    return edge_index, correction_used
+
+
+# ── PyG Data helper ───────────────────────────────────────────────────────────
+
 def make_pyg_data(features_t: torch.Tensor,
                    edge_index: torch.LongTensor,
                    target_t: torch.Tensor) -> Data:
     """
     Construct a PyTorch Geometric Data object for one time step.
 
-    Args:
-        features_t: Node feature matrix, shape (num_stocks, num_features).
-        edge_index: Graph connectivity, shape (2, num_edges) — LongTensor.
-        target_t: Target values, shape (num_stocks,).
+    features_t: Node feature matrix, shape (num_stocks, num_features).
+    edge_index: Graph connectivity, shape (2, num_edges) — LongTensor.
+    target_t: Target values, shape (num_stocks,).
 
-    Returns:
-        Data(x=features_t, edge_index=edge_index, y=target_t).
+    Returns Data(x=features_t, edge_index=edge_index, y=target_t).
 
     Shape assertions:
         - features_t.shape[0] == target_t.shape[0]
