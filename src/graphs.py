@@ -584,6 +584,76 @@ def build_granger_graph(
 
 # ── PyG Data helper ───────────────────────────────────────────────────────────
 
+def verify_sageconv_directionality(
+    num_nodes: int = 10,
+    in_channels: int = 8,
+    out_channels: int = config.HIDDEN_DIM,
+) -> dict:
+    """
+    Verify that SAGEConv with flow=config.SAGE_FLOW respects edge direction.
+
+    Constructs a small asymmetric directed graph, runs a forward pass, then
+    reverses all edges and runs again. Asserts the two outputs differ.
+
+    If the assertion fails, SAGEConv is symmetrizing the adjacency and the
+    Granger graph cannot be used as directed. Do not proceed with GNN-Granger
+    training until the issue is resolved.
+
+    num_nodes: Number of nodes in the test graph.
+    in_channels: Feature dimension per node.
+    out_channels: SAGEConv output dimension (default = config.HIDDEN_DIM).
+
+    Returns dict with keys: flow, num_nodes, num_edges, max_abs_diff, passed.
+
+    Shape assertions:
+        out_forward.shape  == (num_nodes, out_channels)
+        out_reversed.shape == (num_nodes, out_channels)
+    """
+    import random as _random
+    import numpy as _np
+    from torch_geometric.nn import SAGEConv
+
+    _random.seed(config.RANDOM_SEED)
+    _np.random.seed(config.RANDOM_SEED)
+    torch.manual_seed(config.RANDOM_SEED)
+
+    # Asymmetric directed edges: a chain 0->1->2->...->9 plus a few skip
+    # connections, all one-directional. No edge goes both ways.
+    src = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 2, 4], dtype=torch.long)
+    dst = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9, 5, 7, 9], dtype=torch.long)
+    edge_index          = torch.stack([src, dst])     # (2, 12)
+    edge_index_reversed = edge_index[[1, 0]]          # flip src <-> dst
+
+    x = torch.randn(num_nodes, in_channels)
+
+    conv = SAGEConv(in_channels, out_channels, flow=config.SAGE_FLOW)
+    conv.eval()
+
+    with torch.no_grad():
+        out_forward  = conv(x, edge_index)           # (num_nodes, out_channels)
+        out_reversed = conv(x, edge_index_reversed)  # (num_nodes, out_channels)
+
+    assert out_forward.shape == (num_nodes, out_channels), \
+        f"Expected ({num_nodes}, {out_channels}), got {tuple(out_forward.shape)}"
+    assert out_reversed.shape == (num_nodes, out_channels), \
+        f"Expected ({num_nodes}, {out_channels}), got {tuple(out_reversed.shape)}"
+
+    max_abs_diff = float((out_forward - out_reversed).abs().max())
+
+    assert not torch.allclose(out_forward, out_reversed), (
+        "SAGEConv is symmetrizing edges — directionality not working. "
+        "Do not proceed with GNN-Granger training until this is resolved."
+    )
+
+    return {
+        "flow":         config.SAGE_FLOW,
+        "num_nodes":    num_nodes,
+        "num_edges":    int(edge_index.shape[1]),
+        "max_abs_diff": max_abs_diff,
+        "passed":       True,
+    }
+
+
 def make_pyg_data(features_t: torch.Tensor,
                    edge_index: torch.LongTensor,
                    target_t: torch.Tensor) -> Data:
