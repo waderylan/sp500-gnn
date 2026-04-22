@@ -127,58 +127,139 @@ def winsorize_cross_sectional(df: pd.DataFrame,
     """
     Winsorize each feature cross-sectionally at each time step.
 
-    For each row (time step), clip values to [clip[0], clip[1]] quantile of that row's distribution.
+    For each row (time step), clips values to the [clip[0], clip[1]] quantile of that row.
 
-    Args:
-        df: DataFrame of shape (num_weeks, num_stocks).
-        clip: (lower_quantile, upper_quantile) tuple.
-
-    Returns:
-        DataFrame of same shape with extreme values clipped.
+    df: shape (num_weeks, num_stocks)
+    clip: (lower_quantile, upper_quantile)
+    Returns: same shape as input.
     """
-    raise NotImplementedError
+    lower = df.quantile(clip[0], axis=1)
+    upper = df.quantile(clip[1], axis=1)
+    result = df.clip(lower=lower, upper=upper, axis=0)
+    assert result.shape == df.shape, (
+        f"winsorize_cross_sectional: shape changed from {df.shape} to {result.shape}"
+    )
+    return result
 
 
 def zscore_cross_sectional(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Z-score each feature cross-sectionally at each time step (subtract mean, divide by std).
+    Z-score each feature cross-sectionally at each time step.
 
-    Must be called AFTER winsorize_cross_sectional. Never before.
+    Subtracts the row mean and divides by the row std. Call AFTER winsorize_cross_sectional.
 
-    Args:
-        df: DataFrame of shape (num_weeks, num_stocks).
-
-    Returns:
-        DataFrame of same shape.
+    df: shape (num_weeks, num_stocks)
+    Returns: same shape as input.
     """
-    raise NotImplementedError
+    mean = df.mean(axis=1)
+    std = df.std(axis=1)
+    result = df.sub(mean, axis=0).div(std, axis=0)
+    assert result.shape == df.shape, (
+        f"zscore_cross_sectional: shape changed from {df.shape} to {result.shape}"
+    )
+    return result
 
 
-def build_feature_tensor(weekly_rv: pd.DataFrame,
-                          log_returns: pd.DataFrame) -> np.ndarray:
+def build_feature_tensor(
+    weekly_rv: pd.DataFrame,
+    log_returns: pd.DataFrame,
+    volume: pd.DataFrame,
+) -> tuple[np.ndarray, list[str]]:
     """
-    Assemble all features into a 3D tensor and apply the mandatory normalization pipeline
-    (winsorize → z-score, in that order, cross-sectionally).
+    Assemble all features into a 3D tensor and apply winsorize then z-score cross-sectionally.
 
-    Args:
-        weekly_rv: DataFrame of shape (num_weeks, num_stocks).
-        log_returns: DataFrame of shape (num_trading_days, num_stocks).
+    weekly_rv: shape (num_weeks, num_stocks)
+    log_returns: shape (num_trading_days, num_stocks)
+    volume: shape (num_trading_days, num_stocks)
 
-    Returns:
-        ndarray of shape (num_weeks, num_stocks, num_features).
+    Returns: (array of shape (num_weeks, num_stocks, num_features), list of feature names)
 
-    Shape assertion: result.shape == (num_weeks, num_stocks, num_features).
-    Post-normalization assertions run on 10 random time steps per feature.
+    Lookahead safety: delegates to compute_volatility_features and
+    compute_return_volume_features, both of which use only data before each week T.
+    Normalization is row-wise and introduces no cross-time information.
+
+    Post-normalization assertions run at 10 random time steps (after 63-day warm-up):
+      |mean| < 0.01, |std - 1| < 0.05, max|x| < 5.0 per feature.
     """
-    raise NotImplementedError
+    vol_feats = compute_volatility_features(log_returns, weekly_rv)
+    ret_vol_feats = compute_return_volume_features(log_returns, volume, weekly_rv)
+
+    all_feats = pd.concat([vol_feats, ret_vol_feats], axis=1)
+    feature_names = all_feats.columns.get_level_values(0).unique().tolist()
+
+    num_weeks = len(weekly_rv)
+    num_stocks = weekly_rv.shape[1]
+    num_features = len(feature_names)
+
+    arrays: list[np.ndarray] = []
+    for name in feature_names:
+        feat_df = all_feats[name]                    # (num_weeks, num_stocks)
+        feat_df = winsorize_cross_sectional(feat_df)
+        feat_df = zscore_cross_sectional(feat_df)
+        arrays.append(feat_df.values)
+
+    result = np.stack(arrays, axis=2)                # (num_weeks, num_stocks, num_features)
+
+    # Post-normalization assertions at 10 random time steps past the warm-up period
+    rng = np.random.default_rng(config.RANDOM_SEED)
+    eligible = [i for i in range(63, num_weeks) if not np.isnan(result[i]).any()]
+    check_rows = rng.choice(eligible, size=min(10, len(eligible)), replace=False)
+    for t in check_rows:
+        for f_idx, fname in enumerate(feature_names):
+            vals = result[t, :, f_idx]
+            assert abs(np.nanmean(vals)) < 0.01, (
+                f"Mean not near zero at week {t}, feature {fname}: {np.nanmean(vals):.4f}"
+            )
+            assert abs(np.nanstd(vals) - 1.0) < 0.05, (
+                f"Std not near 1 at week {t}, feature {fname}: {np.nanstd(vals):.4f}"
+            )
+            assert np.nanmax(np.abs(vals)) < config.NORM_MAX_ABS, (
+                f"Outlier survived winsorization at week {t}, feature {fname}: "
+                f"{np.nanmax(np.abs(vals)):.4f} (limit={config.NORM_MAX_ABS})"
+            )
+
+    assert result.shape == (num_weeks, num_stocks, num_features), (
+        f"build_feature_tensor: expected ({num_weeks}, {num_stocks}, {num_features}), "
+        f"got {result.shape}"
+    )
+    return result, feature_names
 
 
-def save_features(features: np.ndarray, target: pd.DataFrame,
-                  tickers: list[str], weeks: pd.DatetimeIndex) -> None:
+def save_features(
+    features: np.ndarray,
+    feature_names: list[str],
+    tickers: list[str],
+    weeks: pd.DatetimeIndex,
+) -> None:
     """
-    Reshape the feature tensor to 2D and save features.parquet and target.parquet.
+    Reshape the feature tensor to 2D and save features.parquet + features_meta.json.
 
     Parquet schema: columns = ['week', 'ticker'] + feature_names.
-    Shape assertion before save: 2D reshaped array has shape (num_weeks * num_stocks, num_features + 2).
+    Shape assertion before save: (num_weeks * num_stocks, num_features + 2).
     """
-    raise NotImplementedError
+    import json
+    import os
+
+    num_weeks, num_stocks, num_feats = features.shape
+    flat = features.reshape(num_weeks * num_stocks, num_feats)
+
+    week_col   = np.repeat([str(w.date()) for w in weeks], num_stocks)
+    ticker_col = np.tile(tickers, num_weeks)
+
+    df = pd.DataFrame(flat, columns=feature_names)
+    df.insert(0, "ticker", ticker_col)
+    df.insert(0, "week", week_col)
+
+    assert df.shape == (num_weeks * num_stocks, num_feats + 2), (
+        f"save_features: expected ({num_weeks * num_stocks}, {num_feats + 2}), got {df.shape}"
+    )
+
+    os.makedirs(config.DATA_FEATURES_DIR, exist_ok=True)
+    out_path = f"{config.DATA_FEATURES_DIR}/features.parquet"
+    df.to_parquet(out_path, index=False)
+
+    meta = {"shape": list(features.shape), "feature_names": feature_names}
+    with open(f"{config.DATA_FEATURES_DIR}/features_meta.json", "w") as fh:
+        json.dump(meta, fh, indent=2)
+
+    print(f"Saved {out_path}  shape={df.shape}")

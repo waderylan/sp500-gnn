@@ -77,7 +77,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 ### Phase 2 — Feature Engineering (`notebooks/02_features.ipynb`)
 - [x] 2.1 Volatility features (RV at 5/10/21/63d lookbacks, short/long ratio) · notebook: spot-check values are positive, ratio spikes in volatile regimes
 - [x] 2.2 Return and volume features · notebook: verify lagging, spot-check volume ratio
-- [ ] 2.3 Stack → winsorize → z-score → `data/features/features.parquet` · notebook: assert mean≈0 / std≈1 at 10 random time steps, feature correlation heatmap
+- [x] 2.3 Stack → winsorize → z-score → `data/features/features.parquet` · notebook: assert mean≈0 / std≈1 at 10 random time steps, feature correlation heatmap
 
 ### Phase 3 — Graph Construction (`notebooks/03_graphs.ipynb`)
 - [ ] 3.1 Sector graph → `data/graphs/sector_edges_by_year.parquet` · notebook: networkx plot for 2016 (10 clusters) and 2017 (11 clusters), node counts per sector
