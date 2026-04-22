@@ -47,6 +47,10 @@ LEARNING_RATE           = 0.001
 EARLY_STOP_PATIENCE     = 10        # epochs without val improvement before stopping
 CHECKPOINT_EVERY_N_EPOCHS = 5
 
+# LSTM
+LSTM_SEQ_LEN    = 4   # weeks of feature history per input sequence
+LSTM_MAX_EPOCHS = 150  # upper bound; early stopping triggers first
+
 # Paths — absolute, anchored to the directory containing this file
 from pathlib import Path as _Path
 _ROOT = _Path(__file__).parent

@@ -218,23 +218,37 @@ class LSTMModel(nn.Module):
     """
     2-layer LSTM for per-stock volatility forecasting.
 
+    Each stock's feature sequence is processed independently — batch dimension is stocks.
     Architecture: LSTM(input_size, hidden=64, num_layers=2, dropout=0.3) → Linear(64, 1).
-    Input: 4-week sequence of feature vectors per stock.
-    Output: scalar prediction per stock.
+
+    input_size: number of features per stock per week (e.g. 10)
+    hidden_dim: LSTM hidden size
+    dropout: applied between the two LSTM layers
     """
 
     def __init__(self, input_size: int,
                  hidden_dim: int = config.HIDDEN_DIM,
                  dropout: float = config.DROPOUT) -> None:
         super().__init__()
-        raise NotImplementedError
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_dim,
+            num_layers=2,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.fc = nn.Linear(hidden_dim, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x: Tensor of shape (num_stocks, seq_len, input_size).
         Returns: Tensor of shape (num_stocks,).
         """
-        raise NotImplementedError
+        out, _ = self.lstm(x)             # (num_stocks, seq_len, hidden_dim)
+        last   = out[:, -1, :]            # (num_stocks, hidden_dim)
+        pred   = self.fc(last).squeeze(-1)  # (num_stocks,)
+        assert pred.shape == (x.shape[0],), f"Expected ({x.shape[0]},), got {pred.shape}"
+        return pred
 
 
 class GNNModel(nn.Module):

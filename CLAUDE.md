@@ -92,7 +92,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 
 ### Phase 4 — Model Training (`notebooks/04_models.ipynb`)
 - [x] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet` · notebook: print val MSE/MAE for both, R² distribution
-- [ ] 4.2 LSTM baseline → `checkpoints/lstm_best.pt` · notebook: plot val loss curve
+- [x] 4.2 LSTM baseline → `checkpoints/lstm_best.pt` · notebook: plot val loss curve, directional accuracy vs HAR
 - [ ] 4.3 GNN implementation + forward-pass verification on all three graph types · notebook: print output shapes and confirm no NaNs
 - [ ] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json` · notebook: print ablation table
 - [ ] 4.5 Train GNN-Sector → `gnn_sector_best.pt` · notebook: print val MSE vs GNN-Correlation

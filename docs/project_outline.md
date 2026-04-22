@@ -209,6 +209,7 @@ GraphSAGE is selected over alternatives (GCN, GAT, GIN) for the following reason
 - Mean Squared Error (MSE) — primary accuracy metric
 - Mean Absolute Error (MAE) — interpretable in volatility units
 - R-squared — proportion of variance explained
+- Directional accuracy (DA) — fraction of (stock, week) pairs where the model correctly predicts whether RV(T+1) is higher or lower than RV(T). Computed as mean(sign(pred - RV_T) == sign(actual - RV_T)) over all stocks and val/test weeks. Reported pooled and as a per-stock distribution. The base rate (fraction of weeks where vol actually rose) is reported alongside as context.
 - All metrics reported: pooled across all stocks, and broken down by GICS sector
 
 ### Portfolio Evaluation
