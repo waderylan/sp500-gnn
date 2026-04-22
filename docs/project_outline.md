@@ -97,16 +97,14 @@ All features are computed per stock per week using only data available prior to 
 
 ### Return Features
 
-- Rolling mean log return over 5 days
-- Rolling mean log return over 20 days
-- Price momentum over 5 days
-- Price momentum over 20 days
+- Price momentum over 5 days (5-day cumulative log return)
+- Price momentum over 20 days (20-day cumulative log return)
 
 ### Volume Features
 
 - Rolling mean volume over 5 days
 - Rolling mean volume over 20 days
-- Volume ratio: current week volume / 20-day mean volume (normalized volume)
+- Volume ratio: 5-day mean volume / 20-day mean volume
 
 ### Cross-Sectional Normalization
 
@@ -373,13 +371,13 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 
 ### Task 2.2 — Return and Volume Features
 
-- Implement rolling mean return over 5 and 20 days
-- Implement price momentum over 5 and 20 days (cumulative log return over window)
+- Download and save volume data to data/raw/volume.parquet via download_volume() in src/data.py
+- Implement price momentum over 5 and 20 days (5-day and 20-day cumulative log return)
 - Implement rolling mean volume over 5 and 20 days
-- Implement volume ratio: last week volume / 20-day rolling mean volume
-- All windows lagged as per Task 2.1 requirement
+- Implement volume ratio: 5-day mean volume / 20-day mean volume
+- All windows lagged: values at week T use only data from trading days strictly before Monday_T
 
-| **Output** | 7 return and volume feature arrays aligned to weekly index |
+| **Output** | 5 return and volume feature arrays aligned to weekly index |
 |---|---|
 
 ### Task 2.3 — Stack, Winsorize, and Cross-Sectional Normalization

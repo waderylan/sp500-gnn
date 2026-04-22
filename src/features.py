@@ -63,24 +63,63 @@ def compute_volatility_features(
     return result
 
 
-def compute_momentum_features(log_returns: pd.DataFrame,
-                               weekly_index: pd.DatetimeIndex) -> pd.DataFrame:
+def compute_return_volume_features(
+    log_returns: pd.DataFrame,
+    volume: pd.DataFrame,
+    weekly_rv: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    Compute cross-sectional momentum features aligned to weekly_index.
+    Compute 5-day and 20-day cumulative return (momentum) and volume features aligned
+    to the weekly prediction schedule.
 
-    Features: 4-week cumulative return, 13-week cumulative return (each ending before week T).
+    Features (5 total):
+        momentum_5d  -- 5-day cumulative log return ending before week T
+        momentum_20d -- 20-day cumulative log return ending before week T
+        mean_vol_5d  -- 5-day rolling mean volume ending before week T
+        mean_vol_20d -- 20-day rolling mean volume ending before week T
+        volume_ratio -- mean_vol_5d / mean_vol_20d
 
-    Args:
-        log_returns: Daily log returns, shape (num_trading_days, num_stocks).
-        weekly_index: DatetimeIndex of ISO week start dates.
+    For each Monday in weekly_rv.index (week T), values are taken from the last available
+    trading day before that Monday via reindex with forward-fill to the preceding Sunday.
 
-    Returns:
-        DataFrame of shape (num_weeks, num_stocks * 2).
+    log_returns: shape (num_trading_days, num_stocks) -- daily log returns.
+    volume: shape (num_trading_days, num_stocks) -- daily trading volume.
+    weekly_rv: shape (num_weeks, num_stocks) -- index is Monday week-start dates.
 
-    Lookahead safety: cumulative return for week T uses only trading days strictly before
-    the start of week T.
+    Returns: DataFrame of shape (num_weeks, num_stocks * 5) with MultiIndex columns
+             (feature_name, ticker).
+
+    Lookahead safety: all rolling windows end at Friday_{T-1}, strictly before Monday_T.
+    Shape assertion: result.shape == (len(weekly_rv), weekly_rv.shape[1] * 5).
     """
-    raise NotImplementedError
+    lookup_dates = weekly_rv.index - pd.Timedelta(days=1)  # Sundays before each Monday
+
+    def _align(daily: pd.DataFrame) -> pd.DataFrame:
+        weekly = daily.reindex(lookup_dates, method="ffill")
+        weekly.index = weekly_rv.index
+        return weekly
+
+    aligned: dict[str, pd.DataFrame] = {}
+
+    aligned["momentum_5d"]  = _align(log_returns.rolling(5).sum())
+    aligned["momentum_20d"] = _align(log_returns.rolling(20).sum())
+
+    vol_5d  = _align(volume.rolling(5).mean())
+    vol_20d = _align(volume.rolling(20).mean())
+    aligned["mean_vol_5d"]  = vol_5d
+    aligned["mean_vol_20d"] = vol_20d
+    aligned["volume_ratio"] = vol_5d / vol_20d.replace(0.0, np.nan)
+
+    result = pd.concat(aligned, axis=1)  # MultiIndex columns: (feature_name, ticker)
+
+    num_weeks  = len(weekly_rv)
+    num_stocks = weekly_rv.shape[1]
+    assert result.shape == (num_weeks, num_stocks * 5), (
+        f"compute_return_volume_features: expected ({num_weeks}, {num_stocks * 5}), "
+        f"got {result.shape}"
+    )
+
+    return result
 
 
 def winsorize_cross_sectional(df: pd.DataFrame,

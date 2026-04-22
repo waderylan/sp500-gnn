@@ -446,6 +446,58 @@ def make_splits(index: pd.Index) -> pd.DataFrame:
     return result
 
 
+def download_volume() -> pd.DataFrame:
+    """
+    Download daily trading volume for the saved S&P 500 universe and persist to disk.
+
+    Reads tickers from data/raw/tickers.json (already filtered by download_prices).
+    Downloads the Volume column from yfinance over the same date range as prices.
+    Saves to data/raw/volume.parquet.
+
+    Returns: DataFrame of shape (num_trading_days, num_stocks).
+
+    Lookahead safety: no rolling windows; raw volume data only.
+    Shape assertion: result.shape[1] == len(tickers).
+    """
+    import yfinance as yf
+
+    raw_dir = Path(config.DATA_RAW_DIR)
+
+    with open(raw_dir / "tickers.json") as fh:
+        tickers: list[str] = json.load(fh)
+
+    print(f"Downloading volume for {len(tickers)} tickers...")
+    raw = yf.download(
+        tickers,
+        start="2015-01-01",
+        end="2025-12-31",
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+    )
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        volume: pd.DataFrame = raw["Volume"].copy()
+    else:
+        volume = raw[["Volume"]].rename(columns={"Volume": tickers[0]})
+
+    # Align column order to saved ticker list
+    available = [t for t in tickers if t in volume.columns]
+    volume = volume[available]
+
+    assert volume.shape[1] == len(available), (
+        f"Volume column count mismatch: {volume.shape[1]} != {len(available)}"
+    )
+    assert volume.shape[0] > 0, "Volume DataFrame has zero rows"
+
+    volume.to_parquet(raw_dir / "volume.parquet")
+    print(
+        f"Saved: volume.parquet "
+        f"({volume.shape[1]} stocks × {volume.shape[0]} days) → {raw_dir}/"
+    )
+    return volume
+
+
 def download_tbill_rates() -> pd.Series:
     """
     Download FRED DTB3 (3-month T-bill daily rates) via pandas-datareader.
