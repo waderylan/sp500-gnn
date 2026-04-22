@@ -59,9 +59,38 @@ def build_sector_graph(tickers: list[str],
     Returns:
         edge_index: LongTensor of shape (2, num_edges).
 
-    Shape assertion: edge_index.shape[0] == 2, edge_index.max() < len(tickers).
+    Lookahead safety: no price/return data used. Sector assignments are
+    point-in-time for the start of `year`, known before any week in that year.
+    Shape assertions: edge_index.shape[0] == 2, edge_index.max() < len(tickers).
     """
-    raise NotImplementedError
+    year_key = str(year)
+
+    # Map each ticker to its sector for this year; None if missing
+    sectors = [sector_history.get(t, {}).get(year_key) for t in tickers]
+
+    # Group ticker indices by sector
+    sector_to_indices: dict[str, list[int]] = {}
+    for idx, sector in enumerate(sectors):
+        if sector is not None:
+            sector_to_indices.setdefault(sector, []).append(idx)
+
+    # Emit both directions for every within-sector pair
+    src_list: list[int] = []
+    dst_list: list[int] = []
+    for indices in sector_to_indices.values():
+        for i in range(len(indices)):
+            for j in range(len(indices)):
+                if i != j:
+                    src_list.append(indices[i])
+                    dst_list.append(indices[j])
+
+    edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
+
+    assert edge_index.shape[0] == 2, f"edge_index row dim should be 2, got {edge_index.shape[0]}"
+    assert edge_index.shape[1] > 0, f"Sector graph for {year} has no edges"
+    assert int(edge_index.max()) < len(tickers), "edge_index references out-of-bounds node index"
+
+    return edge_index
 
 
 def build_granger_graph(log_returns: pd.DataFrame,
@@ -97,6 +126,8 @@ def build_all_sector_graphs(tickers: list[str],
     Pre-build sector graphs for all years and return as a dict {year: edge_index}.
     Also saves results to data/graphs/sector_edges_by_year.parquet.
 
+    Columns saved: [year, src, dst] — all integer indices into `tickers`.
+
     Args:
         tickers: Ordered list of ticker symbols.
         sector_history: Dict of {ticker: {str(year): sector_name}}.
@@ -105,7 +136,30 @@ def build_all_sector_graphs(tickers: list[str],
     Returns:
         Dict mapping year (int) to edge_index (LongTensor).
     """
-    raise NotImplementedError
+    import os
+
+    graphs: dict[int, torch.LongTensor] = {}
+    rows: list[dict] = []
+
+    for year in years:
+        edge_index = build_sector_graph(tickers, year, sector_history)
+        graphs[year] = edge_index
+        src = edge_index[0].tolist()
+        dst = edge_index[1].tolist()
+        for s, d in zip(src, dst):
+            rows.append({"year": year, "src": s, "dst": d})
+
+    df = pd.DataFrame(rows, columns=["year", "src", "dst"])
+    df = df.astype({"year": "int32", "src": "int32", "dst": "int32"})
+
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, "sector_edges_by_year.parquet")
+    os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
+    df.to_parquet(out_path, index=False)
+    print(f"Saved {len(df)} total edges across {len(graphs)} years to {out_path}")
+
+    assert df.shape[1] == 3, f"Expected 3 columns, got {df.shape[1]}"
+
+    return graphs
 
 
 def make_pyg_data(features_t: torch.Tensor,

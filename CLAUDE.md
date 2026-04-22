@@ -80,7 +80,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 2.3 Stack → winsorize → z-score → `data/features/features.parquet` · notebook: assert mean≈0 / std≈1 at 10 random time steps, feature correlation heatmap
 
 ### Phase 3 — Graph Construction (`notebooks/03_graphs.ipynb`)
-- [ ] 3.1 Sector graph → `data/graphs/sector_edges_by_year.parquet` · notebook: networkx plot for 2016 (10 clusters) and 2017 (11 clusters), node counts per sector
+- [x] 3.1 Sector graph → `data/graphs/sector_edges_by_year.parquet` · notebook: networkx plot for 2016 (10 clusters) and 2017 (11 clusters), node counts per sector
 - [ ] 3.2 Correlation graph builder (`build_correlation_graph()`) · notebook: visualize calm/COVID/recent samples, print edge counts
 - [ ] 3.3 Granger causality computation → `data/graphs/granger_pvalues.parquet`, `granger_edges.parquet` · notebook: print edge count, in/out-degree distribution plot
 - [ ] 3.4 SAGEConv directionality verification · notebook: named cell with assert that reversed edges produce different output

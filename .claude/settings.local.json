@@ -3,7 +3,8 @@
     "allow": [
       "Bash(mkdir -p docs exploration)",
       "Bash(mv ISE537_GNN_Final_Project_Overview.pdf Old_Final_Project_Idea.pdf sp500_gnn_draft_memo.docx README.md docs/)",
-      "Bash(mv arima.ipynb create_dataset.ipynb exploration.ipynb features.ipynb gnn.ipynb graph_builder.ipynb lstm.ipynb data/ models/ exploration/)"
+      "Bash(mv arima.ipynb create_dataset.ipynb exploration.ipynb features.ipynb gnn.ipynb graph_builder.ipynb lstm.ipynb data/ models/ exploration/)",
+      "Bash(uv run python -c ' *)"
     ]
   }
 }
