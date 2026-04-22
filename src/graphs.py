@@ -654,6 +654,71 @@ def verify_sageconv_directionality(
     }
 
 
+# ── Graph statistics ──────────────────────────────────────────────────────────
+
+def compute_graph_stats(
+    edge_index: torch.LongTensor,
+    num_nodes: int,
+    directed: bool = False,
+) -> dict:
+    """
+    Compute summary statistics for a graph given its edge index.
+
+    edge_index: Shape (2, num_edges). For undirected graphs, both directions
+                must be present (A->B and B->A), as is the PyG convention.
+    num_nodes: Total node count, including nodes with zero degree.
+    directed: If True, reports separate in/out-degree stats and counts every
+              directed edge. If False, counts unique pairs (divides raw edge
+              count by 2) and reports a single degree per node.
+
+    Returns a dict with: num_nodes, num_edges, density, and degree statistics.
+    Undirected keys: mean_degree, max_degree.
+    Directed keys:   mean_out_degree, max_out_degree, mean_in_degree, max_in_degree.
+
+    Shape assertion: edge_index.shape[0] == 2.
+    """
+    assert edge_index.shape[0] == 2, \
+        f"edge_index row dim should be 2, got {edge_index.shape[0]}"
+
+    num_raw = edge_index.shape[1]
+
+    if not directed:
+        num_edges = num_raw // 2
+        possible  = num_nodes * (num_nodes - 1) // 2
+    else:
+        num_edges = num_raw
+        possible  = num_nodes * (num_nodes - 1)
+
+    density = num_edges / possible if possible > 0 else 0.0
+
+    if num_raw > 0:
+        src_np  = edge_index[0].numpy()
+        dst_np  = edge_index[1].numpy()
+        out_deg = np.bincount(src_np, minlength=num_nodes)
+        in_deg  = np.bincount(dst_np, minlength=num_nodes)
+    else:
+        out_deg = np.zeros(num_nodes, dtype=np.int64)
+        in_deg  = np.zeros(num_nodes, dtype=np.int64)
+
+    if directed:
+        return {
+            "num_nodes":       num_nodes,
+            "num_edges":       num_edges,
+            "density":         density,
+            "mean_out_degree": float(out_deg.mean()),
+            "max_out_degree":  int(out_deg.max()),
+            "mean_in_degree":  float(in_deg.mean()),
+            "max_in_degree":   int(in_deg.max()),
+        }
+    return {
+        "num_nodes":   num_nodes,
+        "num_edges":   num_edges,
+        "density":     density,
+        "mean_degree": float(out_deg.mean()),
+        "max_degree":  int(out_deg.max()),
+    }
+
+
 def make_pyg_data(features_t: torch.Tensor,
                    edge_index: torch.LongTensor,
                    target_t: torch.Tensor) -> Data:
@@ -668,6 +733,14 @@ def make_pyg_data(features_t: torch.Tensor,
 
     Shape assertions:
         - features_t.shape[0] == target_t.shape[0]
-        - edge_index.max() < features_t.shape[0]
+        - edge_index.max() < features_t.shape[0] (when edges > 0)
     """
-    raise NotImplementedError
+    num_nodes = features_t.shape[0]
+    assert features_t.shape[0] == target_t.shape[0], (
+        f"features_t has {features_t.shape[0]} nodes but target_t has {target_t.shape[0]}"
+    )
+    if edge_index.shape[1] > 0:
+        assert int(edge_index.max()) < num_nodes, (
+            f"edge_index max {int(edge_index.max())} >= num_nodes {num_nodes}"
+        )
+    return Data(x=features_t, edge_index=edge_index, y=target_t)

@@ -84,7 +84,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 3.2 Correlation graph builder (`build_correlation_graph()`) · notebook: visualize calm/COVID/recent samples, print edge counts
 - [x] 3.3 Granger causality computation → `data/graphs/granger_pvalues.parquet`, `granger_edges.parquet` · notebook: print edge count, in/out-degree distribution plot
 - [x] 3.4 SAGEConv directionality verification · notebook: named cell with assert that reversed edges produce different output
-- [ ] 3.5 Graph stats, visualization → `figures/graph_comparison.png` · notebook: density table, side-by-side graph figure saved to disk
+- [x] 3.5 Graph stats, visualization → `figures/graph_comparison.png` · notebook: density table, side-by-side graph figure saved to disk
 
 ### Phase 4 — Model Training (`notebooks/04_models.ipynb`)
 - [ ] 4.1 HAR baselines (per-stock + pooled) → `har_val_preds.parquet`, `har_pooled_val_preds.parquet` · notebook: print val MSE/MAE for both, R² distribution
