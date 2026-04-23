@@ -95,7 +95,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 4.2 LSTM baseline → `checkpoints/lstm_best.pt` · `notebooks/04_baseline_models.ipynb`: plot val loss curve, directional accuracy vs HAR
 - [x] 4.3 GNN implementation + forward-pass verification on all three graph types · `notebooks/04_gnn_models.ipynb`: print output shapes and confirm no NaNs
 - [x] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json` · `notebooks/04_gnn_models.ipynb`: print ablation table
-- [ ] 4.5 Train GNN-Sector → `gnn_sector_best.pt` · `notebooks/04_gnn_models.ipynb`: print val MSE vs GNN-Correlation
+- [x] 4.5 Train GNN-Sector → `gnn_sector_best.pt` · `notebooks/04_gnn_models.ipynb`: print val MSE vs GNN-Correlation
 - [ ] 4.6 Train GNN-Granger → `gnn_granger_best.pt` · `notebooks/04_gnn_models.ipynb`: print val MSE, confirm correction method
 - [ ] 4.7 Validation summary + go/no-go checkpoint → `validation_summary.json` · `notebooks/04_gnn_models.ipynb`: print ranked model table, document go/no-go decision
 

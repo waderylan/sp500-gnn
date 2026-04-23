@@ -374,3 +374,119 @@ def train_gnn_corr_ablation(
     print(f"Checkpoint: {dst_ckpt}")
 
     return ablation
+
+
+def train_gnn_sector(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    sector_graphs: dict,
+    splits: pd.DataFrame,
+    device: torch.device,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[GNNModel, list[float]]:
+    """
+    Train GNN-Sector using annual point-in-time GICS sector graphs.
+
+    At each time step T, looks up sector_graphs[week.year] to get the graph.
+    No price or return data enters edge construction. The sector assignment
+    for year Y is fixed at the start of year Y, before any week in Y begins.
+
+    features:      shape (num_weeks, num_stocks, num_features)
+    target:        shape (num_weeks, num_stocks)
+    week_index:    DatetimeIndex aligned to features/target rows
+    sector_graphs: {year (int): edge_index LongTensor}, from build_all_sector_graphs()
+    splits:        DataFrame with columns ['week', 'split']
+    device:        torch.device for computation
+    max_epochs:    hard epoch ceiling
+
+    Returns: (best model loaded from checkpoint, val_loss_history per epoch)
+    Checkpoint: config.CHECKPOINTS_DIR / "gnn_sector_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / "gnn_sector_val_loss.json"
+
+    Lookahead safety: sector assignments are point-in-time at the start of each
+    calendar year. No return or price data is used in edge construction.
+    Shape assertion: all years in week_index must be present as keys in sector_graphs.
+    """
+    years_needed = {w.year for w in week_index}
+    missing = years_needed - set(sector_graphs.keys())
+    assert not missing, f"sector_graphs missing years: {missing}"
+
+    in_channels = features.shape[2]
+    set_seeds()
+    model = GNNModel(in_channels=in_channels).to(device)
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week: sector_graphs[week.year]
+    )
+
+    return train_gnn(
+        model=model,
+        features=features,
+        target=target,
+        week_index=week_index,
+        edge_index_fn=edge_fn,
+        splits=splits,
+        graph_type="sector",
+        device=device,
+        max_epochs=max_epochs,
+    )
+
+
+def predict_gnn_val(
+    model: GNNModel,
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    edge_index_fn: Callable[[pd.Timestamp], torch.LongTensor],
+    splits: pd.DataFrame,
+    tickers: list[str],
+    device: torch.device,
+) -> pd.DataFrame:
+    """
+    Generate validation-set predictions from a trained GNN model.
+
+    Iterates over val weeks in chronological order. Skips any week with NaN
+    in features or target, matching the filter used during training.
+
+    features:      shape (num_weeks, num_stocks, num_features)
+    target:        shape (num_weeks, num_stocks) — used only for NaN-skip logic
+    week_index:    DatetimeIndex aligned to features/target rows
+    edge_index_fn: Callable mapping pd.Timestamp to LongTensor edge_index
+    splits:        DataFrame with columns ['week', 'split']
+    tickers:       Ordered ticker list, length num_stocks
+    device:        torch.device
+
+    Returns DataFrame of shape (num_val_weeks, num_stocks), indexed by week
+    timestamp, columns = tickers. Values are predicted next-week RV.
+
+    Lookahead safety: accesses only features[i] and edge_index_fn(week) for each
+    val week i. No test data is accessed.
+    Shape assertions: output.shape[1] == len(tickers), output.shape[0] > 0.
+    """
+    val_weeks = set(splits.loc[splits["split"] == "val", "week"])
+
+    rows:  list[np.ndarray]    = []
+    index: list[pd.Timestamp]  = []
+
+    model.eval()
+    with torch.no_grad():
+        for i, week in enumerate(week_index):
+            if week not in val_weeks:
+                continue
+            if np.isnan(features[i]).any() or np.isnan(target[i]).any():
+                continue
+            x    = torch.tensor(features[i], dtype=torch.float32).to(device)
+            ei   = edge_index_fn(week).to(device)
+            pred = model(x, ei).cpu().numpy()
+            rows.append(pred)
+            index.append(week)
+
+    result = pd.DataFrame(rows, index=pd.DatetimeIndex(index), columns=tickers)
+
+    assert result.shape[1] == len(tickers), (
+        f"Expected {len(tickers)} columns, got {result.shape[1]}"
+    )
+    assert len(result) > 0, "No valid val weeks found in splits"
+
+    return result
