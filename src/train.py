@@ -433,6 +433,66 @@ def train_gnn_sector(
     )
 
 
+def train_gnn_granger(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    granger_edge_index: torch.LongTensor,
+    splits: pd.DataFrame,
+    device: torch.device,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[GNNModel, list[float]]:
+    """
+    Train GNN-Granger using the static directed Granger causality graph.
+
+    At each time step the same granger_edge_index is returned. No price or return
+    data enters edge construction after the Granger tests were run on training data.
+
+    features:           shape (num_weeks, num_stocks, num_features)
+    target:             shape (num_weeks, num_stocks)
+    week_index:         DatetimeIndex aligned to features/target rows
+    granger_edge_index: Directed LongTensor of shape (2, num_edges), static
+    splits:             DataFrame with columns ['week', 'split']
+    device:             torch.device for computation
+    max_epochs:         hard epoch ceiling
+
+    Returns: (best model loaded from checkpoint, val_loss_history per epoch)
+    Checkpoint: config.CHECKPOINTS_DIR / "gnn_granger_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / "gnn_granger_val_loss.json"
+
+    Lookahead safety: Granger edge_index was computed from training data only
+    (through config.TRAIN_END). The same static graph is used for every time step
+    including val weeks. No future data enters edge construction.
+    Shape assertions: granger_edge_index.shape[0] == 2, shape[1] > 0.
+    """
+    assert granger_edge_index.shape[0] == 2, (
+        f"granger_edge_index row dim should be 2, got {granger_edge_index.shape[0]}"
+    )
+    assert granger_edge_index.shape[1] > 0, (
+        "granger_edge_index has no edges — run build_granger_graph() and check edge count"
+    )
+
+    in_channels = features.shape[2]
+    set_seeds()
+    model = GNNModel(in_channels=in_channels).to(device)
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week: granger_edge_index
+    )
+
+    return train_gnn(
+        model=model,
+        features=features,
+        target=target,
+        week_index=week_index,
+        edge_index_fn=edge_fn,
+        splits=splits,
+        graph_type="granger",
+        device=device,
+        max_epochs=max_epochs,
+    )
+
+
 def predict_gnn_val(
     model: GNNModel,
     features: np.ndarray,
