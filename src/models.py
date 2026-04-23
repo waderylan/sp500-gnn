@@ -270,7 +270,10 @@ class GNNModel(nn.Module):
                  hidden_dim: int = config.HIDDEN_DIM,
                  dropout: float = config.DROPOUT) -> None:
         super().__init__()
-        raise NotImplementedError
+        self.conv1   = SAGEConv(in_channels, hidden_dim, flow=config.SAGE_FLOW)
+        self.conv2   = SAGEConv(hidden_dim,  hidden_dim, flow=config.SAGE_FLOW)
+        self.dropout = nn.Dropout(p=dropout)
+        self.fc      = nn.Linear(hidden_dim, 1)
 
     def forward(self, x: torch.Tensor, edge_index: torch.LongTensor) -> torch.Tensor:
         """
@@ -278,4 +281,10 @@ class GNNModel(nn.Module):
         edge_index: Graph connectivity, shape (2, num_edges).
         Returns: Tensor of shape (num_stocks,).
         """
-        raise NotImplementedError
+        num_nodes = x.shape[0]
+        x = self.dropout(torch.relu(self.conv1(x, edge_index)))
+        x = self.dropout(torch.relu(self.conv2(x, edge_index)))
+        pred = self.fc(x).squeeze(-1)   # (num_nodes,)
+        assert pred.shape == (num_nodes,), f"Expected ({num_nodes},), got {pred.shape}"
+        assert not torch.isnan(pred).any(), "NaN in GNN output"
+        return pred

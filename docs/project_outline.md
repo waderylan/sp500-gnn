@@ -258,7 +258,8 @@ The project uses a hybrid notebook + module structure. Notebooks serve as orches
 | 01_data.ipynb | Runs data.py. Verifies target construction. Shows RV distribution plots and COVID spike. |
 | 02_features.ipynb | Runs features.py. Verifies normalization and winsorization. Shows feature correlation heatmap. |
 | 03_graphs.ipynb | Runs graphs.py. Visualizes all three graphs for a sample week. Reports density statistics. Verifies SAGEConv directionality behavior. |
-| 04_models.ipynb | Trains all five models. Saves checkpoints. Logs validation loss curves. |
+| 04_baseline_models.ipynb | Trains HAR (per-stock and pooled) and LSTM baselines. Saves predictions and checkpoints. Logs validation loss curves and directional accuracy. |
+| 04_gnn_models.ipynb | Implements and verifies GNNModel forward pass. Trains GNN-Correlation, GNN-Sector, and GNN-Granger. Saves checkpoints and produces validation summary. |
 | 05_evaluate.ipynb | Loads checkpoints. Runs final test set evaluation. Produces ML metrics table. |
 | 06_portfolio.ipynb | Runs portfolio backtest. Produces all portfolio figures and metrics table. |
 | 07_significance.ipynb | Runs all statistical significance tests. Produces significance summary table for paper. |

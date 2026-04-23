@@ -6,7 +6,8 @@
       "Bash(mv arima.ipynb create_dataset.ipynb exploration.ipynb features.ipynb gnn.ipynb graph_builder.ipynb lstm.ipynb data/ models/ exploration/)",
       "Bash(uv run python -c ' *)",
       "Bash(python -c \"import sys,json; nb=json.load\\(sys.stdin\\); cell=nb['cells'][9]; [print\\(o.get\\('text',''\\)\\) for o in cell.get\\('outputs',[]\\)]\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python *)"
     ]
   }
 }
