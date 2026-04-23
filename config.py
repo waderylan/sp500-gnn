@@ -25,6 +25,7 @@ TRANSACTION_COST_BPS = 10            # one-way cost in basis points
 # Graph construction — correlation
 CORR_THRESHOLD    = 0.5             # edge threshold θ (tuned on val; ablation: {0.3, 0.5, 0.7})
 CORR_LOOKBACK_DAYS = 252            # rolling lookback window for correlation graph
+CORR_ABLATION_THRESHOLDS = [0.3, 0.5, 0.7]  # θ values tested in the ablation study
 
 # Three sample dates for correlation graph visualization (all in train or val)
 CORR_SAMPLE_DATES = {
@@ -50,6 +51,7 @@ CHECKPOINT_EVERY_N_EPOCHS = 5
 # LSTM
 LSTM_SEQ_LEN    = 4   # weeks of feature history per input sequence
 LSTM_MAX_EPOCHS = 150  # upper bound; early stopping triggers first
+GNN_MAX_EPOCHS  = 150  # upper bound; early stopping triggers first
 
 # Paths — absolute, anchored to the directory containing this file
 from pathlib import Path as _Path

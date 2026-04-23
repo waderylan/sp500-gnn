@@ -11,6 +11,7 @@ Key invariants:
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -22,6 +23,7 @@ import torch.nn as nn
 
 import config
 from src.models import LSTMModel, GNNModel
+from src.graphs import build_correlation_graph
 
 
 def set_seeds() -> None:
@@ -269,3 +271,106 @@ def train_gnn(
 
     model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
     return model, val_loss_history
+
+
+def train_gnn_corr_ablation(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    log_returns: pd.DataFrame,
+    splits: pd.DataFrame,
+    device: torch.device,
+    thresholds: list[float] | None = None,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> dict[float, float]:
+    """
+    Train GNN-Correlation for each threshold in config.CORR_ABLATION_THRESHOLDS.
+
+    For each θ: sets seeds, initializes a fresh GNNModel, and calls train_gnn()
+    with edge_index_fn = build_correlation_graph(..., threshold=θ). Records the
+    best validation MSE from the saved loss JSON (the minimum over all epochs).
+
+    After all runs, copies the winning checkpoint to gnn_corr_best.pt and saves
+    the full ablation results to DATA_RESULTS_DIR/corr_threshold_ablation.json.
+
+    features:    shape (num_weeks, num_stocks, num_features)
+    target:      shape (num_weeks, num_stocks)
+    week_index:  DatetimeIndex aligned to features/target rows
+    log_returns: daily log returns, used by build_correlation_graph
+    splits:      DataFrame with columns ['week', 'split']
+    device:      torch.device for computation
+    thresholds:  list of θ values; defaults to config.CORR_ABLATION_THRESHOLDS
+    max_epochs:  hard epoch ceiling passed to train_gnn
+
+    Returns: {threshold: best_val_mse} for every θ tested
+
+    Checkpoints: gnn_corr_th{int(θ*10):02d}_best.pt per run
+                 gnn_corr_best.pt for the winning θ
+    Ablation JSON: DATA_RESULTS_DIR/corr_threshold_ablation.json
+    """
+    if thresholds is None:
+        thresholds = config.CORR_ABLATION_THRESHOLDS
+
+    in_channels = features.shape[2]
+    results_dir = Path(config.DATA_RESULTS_DIR)
+    ckpt_dir    = Path(config.CHECKPOINTS_DIR)
+    ablation: dict[float, float] = {}
+
+    for theta in thresholds:
+        print(f"\n{'=' * 60}")
+        print(f"GNN-Correlation  θ={theta}")
+        print(f"{'=' * 60}")
+
+        set_seeds()
+        model = GNNModel(in_channels=in_channels).to(device)
+
+        # Default arg captures theta at definition time — avoids loop closure bug
+        edge_fn = lambda week, th=theta: build_correlation_graph(
+            log_returns, week, config.CORR_LOOKBACK_DAYS, th
+        )
+
+        graph_tag = f"corr_th{int(theta * 10):02d}"
+        train_gnn(
+            model=model,
+            features=features,
+            target=target,
+            week_index=week_index,
+            edge_index_fn=edge_fn,
+            splits=splits,
+            graph_type=graph_tag,
+            device=device,
+            max_epochs=max_epochs,
+        )
+
+        loss_path = results_dir / f"gnn_{graph_tag}_val_loss.json"
+        with open(loss_path) as fh:
+            loss_data = json.load(fh)
+        best_mse = loss_data["best_val_loss"]
+        ablation[theta] = best_mse
+        print(f"θ={theta}  best val MSE={best_mse:.6f}")
+
+    assert len(ablation) == len(thresholds), (
+        f"Expected {len(thresholds)} ablation entries, got {len(ablation)}"
+    )
+
+    best_theta = min(ablation, key=ablation.__getitem__)
+    best_tag   = f"corr_th{int(best_theta * 10):02d}"
+    src_ckpt   = ckpt_dir / f"gnn_{best_tag}_best.pt"
+    dst_ckpt   = ckpt_dir / "gnn_corr_best.pt"
+    shutil.copy2(src_ckpt, dst_ckpt)
+
+    ablation_out = {
+        "thresholds_tested": thresholds,
+        "val_mse_by_threshold": {str(k): v for k, v in ablation.items()},
+        "best_threshold": best_theta,
+        "best_val_mse": ablation[best_theta],
+    }
+    results_dir.mkdir(parents=True, exist_ok=True)
+    with open(results_dir / "corr_threshold_ablation.json", "w") as fh:
+        json.dump(ablation_out, fh, indent=2)
+
+    print(f"\nAblation complete.")
+    print(f"Best θ={best_theta}  val MSE={ablation[best_theta]:.6f}")
+    print(f"Checkpoint: {dst_ckpt}")
+
+    return ablation
