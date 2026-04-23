@@ -16,7 +16,9 @@ the directed edge index.
 
 from __future__ import annotations
 
+import json
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -56,6 +58,13 @@ def build_correlation_graph(log_returns: pd.DataFrame,
 
     # Last `lookback` rows up to and including `date`
     window = log_returns.loc[:date].iloc[-lookback:]
+    if len(window) < lookback:
+        warnings.warn(
+            f"build_correlation_graph: only {len(window)} rows available before "
+            f"{date.date()} (requested {lookback}). "
+            "Correlation estimated on a shorter window.",
+            stacklevel=2,
+        )
 
     # pandas .corr() uses pairwise deletion -- NaN pairs produce NaN, which
     # fails the >= threshold check and are simply skipped (no edge added)
@@ -393,42 +402,47 @@ def run_granger_tests_gpu(
     print_every = max(1, N // 10)
 
     for b_idx in range(N):
-        y = R[lag:, b_idx]  # (T_eff,)
-
-        # Restricted design matrix: [1, B_{t-1}, ..., B_{t-lag}]
-        B_lags = torch.stack(
-            [R[lag - 1 - l : T - 1 - l, b_idx] for l in range(lag)], dim=1
-        )  # (T_eff, lag)
-        X_r = torch.cat([ones, B_lags], dim=1)  # (T_eff, lag+1)
-
-        # Restricted OLS via normal equations
-        XtX_r = X_r.T @ X_r                                          # (lag+1, lag+1)
-        Xty_r = X_r.T @ y                                            # (lag+1,)
-        beta_r = torch.linalg.solve(XtX_r, Xty_r.unsqueeze(1)).squeeze(1)  # (lag+1,)
-        RSS_r = ((y - X_r @ beta_r) ** 2).sum()                      # scalar
-
-        # Unrestricted design matrices for all A != b_idx
-        # Shape: (N-1, T_eff, 2*lag+1) = [intercept | B_lags | A_lags]
-        mask = all_idx != b_idx
-        A_lags = A_lags_all[mask]                                            # (N-1, T_eff, lag)
-        X_r_exp = X_r.unsqueeze(0).expand(N - 1, -1, -1)                    # (N-1, T_eff, lag+1)
-        X_ur = torch.cat([X_r_exp, A_lags], dim=2)                          # (N-1, T_eff, 2*lag+1)
-
-        # Batched OLS via normal equations: solve (X^T X) beta = X^T y
-        y_exp = y.view(1, T_eff, 1).expand(N - 1, -1, -1)                   # (N-1, T_eff, 1)
-        XtX_ur = torch.bmm(X_ur.transpose(1, 2), X_ur)                      # (N-1, 2*lag+1, 2*lag+1)
-        Xty_ur = torch.bmm(X_ur.transpose(1, 2), y_exp)                     # (N-1, 2*lag+1, 1)
-        beta_ur = torch.linalg.solve(XtX_ur, Xty_ur)                        # (N-1, 2*lag+1, 1)
-        RSS_ur = ((y_exp - torch.bmm(X_ur, beta_ur)) ** 2).sum(dim=(1, 2))  # (N-1,)
-
-        # F-statistics. Clamp to 0 to guard against floating-point rounding where
-        # RSS_ur > RSS_r by a tiny epsilon (theoretically impossible, but can occur).
-        F = torch.clamp(
-            ((RSS_r - RSS_ur) / df1) / (RSS_ur / df2), min=0.0
-        ).cpu().numpy()  # (N-1,)
-        pvals = f_dist.sf(F, df1, df2)  # survival function = 1 - CDF
-
         a_indices = np.where(np.arange(N) != b_idx)[0]
+        try:
+            y = R[lag:, b_idx]  # (T_eff,)
+
+            # Restricted design matrix: [1, B_{t-1}, ..., B_{t-lag}]
+            B_lags = torch.stack(
+                [R[lag - 1 - l : T - 1 - l, b_idx] for l in range(lag)], dim=1
+            )  # (T_eff, lag)
+            X_r = torch.cat([ones, B_lags], dim=1)  # (T_eff, lag+1)
+
+            # Restricted OLS via normal equations
+            XtX_r = X_r.T @ X_r                                          # (lag+1, lag+1)
+            Xty_r = X_r.T @ y                                            # (lag+1,)
+            beta_r = torch.linalg.solve(XtX_r, Xty_r.unsqueeze(1)).squeeze(1)  # (lag+1,)
+            RSS_r = ((y - X_r @ beta_r) ** 2).sum()                      # scalar
+
+            # Unrestricted design matrices for all A != b_idx
+            # Shape: (N-1, T_eff, 2*lag+1) = [intercept | B_lags | A_lags]
+            mask = all_idx != b_idx
+            A_lags = A_lags_all[mask]                                            # (N-1, T_eff, lag)
+            X_r_exp = X_r.unsqueeze(0).expand(N - 1, -1, -1)                    # (N-1, T_eff, lag+1)
+            X_ur = torch.cat([X_r_exp, A_lags], dim=2)                          # (N-1, T_eff, 2*lag+1)
+
+            # Batched OLS via normal equations: solve (X^T X) beta = X^T y
+            y_exp = y.view(1, T_eff, 1).expand(N - 1, -1, -1)                   # (N-1, T_eff, 1)
+            XtX_ur = torch.bmm(X_ur.transpose(1, 2), X_ur)                      # (N-1, 2*lag+1, 2*lag+1)
+            Xty_ur = torch.bmm(X_ur.transpose(1, 2), y_exp)                     # (N-1, 2*lag+1, 1)
+            beta_ur = torch.linalg.solve(XtX_ur, Xty_ur)                        # (N-1, 2*lag+1, 1)
+            RSS_ur = ((y_exp - torch.bmm(X_ur, beta_ur)) ** 2).sum(dim=(1, 2))  # (N-1,)
+
+            # F-statistics. Clamp to 0 to guard against floating-point rounding where
+            # RSS_ur > RSS_r by a tiny epsilon (theoretically impossible, but can occur).
+            F = torch.clamp(
+                ((RSS_r - RSS_ur) / df1) / (RSS_ur / df2), min=0.0
+            ).cpu().numpy()  # (N-1,)
+            pvals = f_dist.sf(F, df1, df2)  # survival function = 1 - CDF
+        except RuntimeError:
+            # Degenerate target stock (near-constant series or singular XtX).
+            # Match CPU backend behavior: treat as no Granger causality.
+            pvals = np.ones(len(a_indices))
+
         pval_matrix[b_idx, a_indices] = pvals
 
         if (b_idx + 1) % print_every == 0 or b_idx == N - 1:
@@ -546,12 +560,13 @@ def build_granger_graph(
     bonf_alpha = 0.05 / num_pairs
     bonf_reject = pvals_flat < bonf_alpha
 
-    if bonf_reject.sum() >= 500:
+    if bonf_reject.sum() >= config.GRANGER_MIN_EDGES:
         reject = bonf_reject
         correction_used = "bonferroni"
     else:
         print(
-            f"Bonferroni yielded {int(bonf_reject.sum())} edges (<500). "
+            f"Bonferroni yielded {int(bonf_reject.sum())} edges "
+            f"(< GRANGER_MIN_EDGES={config.GRANGER_MIN_EDGES}). "
             "Falling back to Benjamini-Hochberg FDR."
         )
         reject, _, _, _ = multipletests(pvals_flat, alpha=0.05, method="fdr_bh")
@@ -560,8 +575,16 @@ def build_granger_graph(
     n_edges = int(reject.sum())
     print(f"Correction: {correction_used}  |  Edges: {n_edges:,} / {num_pairs:,} pairs")
 
-    src_edges = src_all[reject].astype(np.int64)
-    dst_edges = dst_all[reject].astype(np.int64)
+    meta_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_meta.json")
+    os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
+    with open(meta_path, "w") as _fh:
+        json.dump({"correction_used": correction_used, "n_edges": n_edges,
+                   "n_pairs": num_pairs}, _fh, indent=2)
+
+    # pval_matrix[b, a] = P(A does NOT Granger-cause B), so src_all=row=B=target,
+    # dst_all=col=A=cause. Edge semantics: cause A -> target B, so cause goes in row 0.
+    src_edges = dst_all[reject].astype(np.int64)   # cause A (col index)
+    dst_edges = src_all[reject].astype(np.int64)   # target B (row index)
     edge_index = torch.tensor(np.stack([src_edges, dst_edges]), dtype=torch.long)
 
     assert edge_index.shape[0] == 2, \

@@ -45,6 +45,7 @@ CORR_SAMPLE_DATES = {
 # Graph construction — Granger
 GRANGER_LAG        = 5              # number of lags for Granger causality F-test
 GRANGER_CORRECTION = "bonferroni"   # "bonferroni" or "bh"; updated after ablation
+GRANGER_MIN_EDGES  = 500            # fall back to BH if Bonferroni yields fewer edges
 
 # GNN architecture
 SAGE_FLOW  = "source_to_target"     # SAGEConv flow direction; critical for Granger directionality
