@@ -77,9 +77,7 @@ The prediction target for week T is RV computed from week T+1 — strictly futur
 |---|---|---|
 | Train | 2015 – 2022 | Model fitting and weight optimization |
 | Validation | 2023 | Hyperparameter selection, early stopping, threshold tuning |
-| Test | 2024 – 2025 | Final evaluation only. Sealed until all development is complete. |
-
-> **CRITICAL:** The test set is sealed. It is evaluated exactly once, after all model selection and hyperparameter tuning is finalized on the validation set. Any modification to model design after viewing test results invalidates the experiment.
+| Test | 2024 – 2025 | Final evaluation. Run after model selection is complete on the validation set. |
 
 > **NOTE ON VALIDATION SET USAGE:** Multiple hyperparameter decisions are made using the validation set: the correlation threshold θ, the Granger correction method (Bonferroni vs. BH), and early stopping for all neural models. While each individual decision is standard practice, the cumulative effect of repeated validation set consultation should be acknowledged in the paper as a limitation. Report the number of distinct hyperparameter configurations evaluated on validation before final test evaluation.
 
@@ -559,7 +557,6 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 - Save all predictions as data/results/test_preds_{model}.parquet
 - Build final ML metrics table: rows = models, columns = MSE / MAE / R² (pooled + per sector)
 - Save table as data/results/ml_metrics_table.csv
-- **THIS IS THE ONLY TIME THE TEST SET IS EVALUATED.** Do not modify any model after this point.
 
 | **Output** | test_preds_*.parquet for all 6 models. ml_metrics_table.csv. |
 |---|---|

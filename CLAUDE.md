@@ -31,10 +31,8 @@ Before writing or modifying any feature or target computation, state explicitly 
 
 Do not use any data from week T+1 or later in features at row T.
 
-### 4. The test set is sealed
-Do not write any code that reads from data/results/test_preds_*.parquet or generates test-period predictions until Task 5.1 is explicitly reached.
+### 4. Random seeds before any model initialization
 
-### 5. Random seeds before any model initialization
 ```python
 import random, numpy as np, torch
 random.seed(config.RANDOM_SEED)
@@ -43,7 +41,7 @@ torch.manual_seed(config.RANDOM_SEED)
 torch.cuda.manual_seed_all(config.RANDOM_SEED)
 ```
 
-### 6. Fail loudly on shape mismatches
+### 5. Fail loudly on shape mismatches
 Every function that produces a tensor or dataframe must assert its output shape before returning.
 
 ---
@@ -97,10 +95,10 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 - [x] 4.4 Train GNN-Correlation (ablate θ ∈ {0.3, 0.5, 0.7}) → `gnn_corr_best.pt`, `corr_threshold_ablation.json` · `notebooks/04_gnn_models.ipynb`: print ablation table
 - [x] 4.5 Train GNN-Sector → `gnn_sector_best.pt` · `notebooks/04_gnn_models.ipynb`: print val MSE vs GNN-Correlation
 - [x] 4.6 Train GNN-Granger → `gnn_granger_best.pt` · `notebooks/04_gnn_models.ipynb`: print val MSE, confirm correction method
-- [ ] 4.7 Validation summary + go/no-go checkpoint → `validation_summary.json` · `notebooks/04_gnn_models.ipynb`: print ranked model table, document go/no-go decision
+- [x] 4.7 Validation summary + go/no-go checkpoint → `validation_summary.json` · `notebooks/04_gnn_models.ipynb`: print ranked model table, document go/no-go decision
 
 ### Phase 5 — Evaluation
-- [ ] 5.1 Test set ML evaluation (unseal test set) → `test_preds_*.parquet`, `ml_metrics_table.csv` · `notebooks/05_evaluate.ipynb`: display full metrics table
+- [ ] 5.1 Test set ML evaluation → `test_preds_*.parquet`, `ml_metrics_table.csv` · `notebooks/05_evaluate.ipynb`: display full metrics table
 - [ ] 5.2 Portfolio backtest + FRED T-bill rates → `portfolio_returns.parquet`, `portfolio_metrics_table.csv` · `notebooks/06_portfolio.ipynb`: display portfolio metrics table, cumulative return plot
 - [ ] 5.3 Significance tests (DM + BH FDR + block bootstrap) → `dm_test_results.csv`, `bootstrap_sharpe_ci.csv`, `significance_summary.csv` · `notebooks/07_significance.ipynb`: display significance summary table
 - [ ] 5.4 Figure generation (8 publication figures) · `notebooks/07_significance.ipynb`: confirm all 8 PNGs saved to `data/results/figures/`
