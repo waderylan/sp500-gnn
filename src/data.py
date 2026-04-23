@@ -76,7 +76,7 @@ def _get_sp500_universe() -> list[str]:
 
     # --- Addition-date filter ---
     current["Date added"] = pd.to_datetime(current["Date added"], errors="coerce")
-    cutoff_added = pd.Timestamp("2016-01-01")
+    cutoff_added = pd.Timestamp(config.UNIVERSE_ADDED_BEFORE)
     mask_early = current["Date added"].isna() | (current["Date added"] < cutoff_added)
     candidates: set[str] = set(current.loc[mask_early, "Symbol"].tolist())
 
@@ -103,7 +103,7 @@ def _get_sp500_universe() -> list[str]:
                 .str.replace(".", "-", regex=False)
                 .replace("nan", pd.NA)
             )
-            cutoff_removed = pd.Timestamp("2024-12-01")
+            cutoff_removed = pd.Timestamp(config.UNIVERSE_NOT_REMOVED_BEFORE)
             early_removals = set(
                 changes.loc[changes[date_col] < cutoff_removed, removed_col]
                 .dropna()
@@ -149,14 +149,14 @@ def _build_sector_history(tickers: list[str]) -> dict[str, dict[str, str]]:
 
             # Real Estate correction
             if current_sector == "Real Estate" and year <= 2016:
-                sector = "Financials"
+                sector = "Financial Services"
 
             # Communication Services correction
             if current_sector == "Communication Services" and year <= 2018:
                 if ticker in _COMM_FROM_IT:
-                    sector = "Information Technology"
+                    sector = "Technology"
                 elif ticker in _COMM_FROM_CONSUMER_DISC:
-                    sector = "Consumer Discretionary"
+                    sector = "Consumer Cyclical"
                 elif ticker in _COMM_FROM_TELECOM:
                     sector = "Telecommunication Services"
                 else:
@@ -214,11 +214,11 @@ def download_prices() -> pd.DataFrame:
     print(f"Candidate universe: {len(all_tickers)} tickers")
 
     # --- 2. Price download ---
-    print("Downloading prices (2015-01-01 → 2025-12-31)...")
+    print(f"Downloading prices ({config.DATA_START} → {config.DATA_END})...")
     raw = yf.download(
         all_tickers,
-        start="2015-01-01",
-        end="2025-12-31",
+        start=config.DATA_START,
+        end=config.DATA_END,
         auto_adjust=True,
         progress=False,
         threads=True,
@@ -350,8 +350,8 @@ def compute_weekly_rv(log_returns: pd.DataFrame) -> pd.DataFrame:
     )
 
     mean_rv = float(rv.mean().mean())
-    assert 0.10 <= mean_rv <= 0.50, (
-        f"Mean annualized RV {mean_rv:.3f} outside expected range [0.10, 0.50]"
+    assert 0.15 <= mean_rv <= 0.25, (
+        f"Mean annualized RV {mean_rv:.3f} outside expected range [0.15, 0.25]"
     )
 
     rv.to_parquet(raw_dir / "weekly_rv.parquet")
@@ -371,8 +371,9 @@ def make_target(weekly_rv: pd.DataFrame) -> pd.DataFrame:
     weekly_rv: DataFrame of shape (num_weeks, num_stocks).
     Returns: DataFrame of shape (num_weeks - 1, num_stocks).
 
-    Lookahead safety: target[T] = rv[T+1] — intentional. Features at T use only data
-    strictly before week T starts, so predicting T+1 RV is the correct direction.
+    Lookahead safety: target[T] = rv[T+1] — intentional. Features at T may use data
+    through Friday of week T (1-step-ahead design). The target is T+1's RV, which starts
+    Monday_{T+1} > Friday_T, so there is no lookahead.
     Shape assertion: result.shape[0] == weekly_rv.shape[0] - 1.
     """
     features_dir = Path(config.DATA_FEATURES_DIR)
@@ -469,8 +470,8 @@ def download_volume() -> pd.DataFrame:
     print(f"Downloading volume for {len(tickers)} tickers...")
     raw = yf.download(
         tickers,
-        start="2015-01-01",
-        end="2025-12-31",
+        start=config.DATA_START,
+        end=config.DATA_END,
         auto_adjust=True,
         progress=False,
         threads=True,
@@ -504,6 +505,32 @@ def download_tbill_rates() -> pd.Series:
     Saves to data/raw/tbill_rates.parquet.
 
     Returns:
-        Series indexed by date, values are annualized T-bill rates (as decimals, not %).
+        Series indexed by date, values are annualized T-bill rates as decimals (0.05 = 5%).
+        DTB3 is a daily series; callers must resample to weekly frequency as needed.
+
+    Lookahead safety: raw rate data only; no rolling windows.
+    Shape assertion: len(result) > 0.
     """
-    raise NotImplementedError
+    try:
+        import pandas_datareader as pdr
+    except ImportError as exc:
+        raise ImportError(
+            "pandas-datareader is required for T-bill download. "
+            "Install with: pip install pandas-datareader"
+        ) from exc
+
+    raw_dir = Path(config.DATA_RAW_DIR)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    tbill = pdr.get_data_fred("DTB3", start=config.DATA_START, end=config.DATA_END)
+    tbill = tbill["DTB3"].dropna() / 100  # convert percentage to decimal
+
+    assert len(tbill) > 0, "DTB3 series returned no data — check FRED connectivity"
+    assert (tbill >= 0).all(), "Negative T-bill rates found — check FRED data"
+
+    tbill.to_frame(name="tbill_rate").to_parquet(raw_dir / "tbill_rates.parquet")
+    print(
+        f"Saved: tbill_rates.parquet ({len(tbill)} days) → {raw_dir}/\n"
+        f"Rate range: {tbill.min():.4f} – {tbill.max():.4f} (annualized decimals)"
+    )
+    return tbill

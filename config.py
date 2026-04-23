@@ -4,6 +4,14 @@ DEV_UNIVERSE_SIZE = 50
 # Reproducibility
 RANDOM_SEED = 22
 
+# Data download date range
+DATA_START = "2015-01-01"
+DATA_END   = "2025-12-31"
+
+# Universe construction filters
+UNIVERSE_ADDED_BEFORE       = "2016-01-01"   # exclude stocks added on or after this date
+UNIVERSE_NOT_REMOVED_BEFORE = "2024-12-01"   # exclude stocks removed before this date
+
 # Train / val / test split boundaries (inclusive end dates)
 TRAIN_END = "2022-12-31"
 VAL_END   = "2023-12-31"

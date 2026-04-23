@@ -25,7 +25,7 @@ Do NOT use any data from week T+1 or later.
 
 ```python
 # RV for a given week = std(daily_log_returns_in_that_week) * sqrt(252)
-# Exactly 5 trading days per ISO week. Weeks with fewer than 5 days are dropped.
+# Weeks with fewer than 3 trading days are dropped; all others are included.
 rv = daily_returns.groupby(iso_week).std() * np.sqrt(252)
 ```
 

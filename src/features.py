@@ -21,9 +21,9 @@ def compute_volatility_features(
     Compute rolling realized volatility features at 5, 10, 21, and 63 trading day lookbacks,
     plus the short/long ratio (rv_5d / rv_63d), aligned to the weekly prediction schedule.
 
-    For each Monday in weekly_rv.index (week T), the feature value is taken from the last
-    available trading day before that Monday (typically the prior Friday). This is done by
-    reindexing the daily rolling series to the preceding Sunday and forward-filling.
+    For each Monday in weekly_rv.index (week T), the feature value is taken from Friday of
+    week T (Monday + 4 days) via reindex with forward-fill. This is the 1-step-ahead design:
+    features include week T's own data; the target is week T+1's RV.
 
     log_returns: shape (num_trading_days, num_stocks) -- daily log returns.
     weekly_rv: shape (num_weeks, num_stocks) -- index is Monday week-start dates.
@@ -76,14 +76,14 @@ def compute_return_volume_features(
     to the weekly prediction schedule.
 
     Features (5 total):
-        momentum_5d  -- 5-day cumulative log return ending before week T
-        momentum_20d -- 20-day cumulative log return ending before week T
-        mean_vol_5d  -- 5-day rolling mean volume ending before week T
-        mean_vol_20d -- 20-day rolling mean volume ending before week T
+        momentum_5d  -- 5-day cumulative log return ending at Friday of week T
+        momentum_20d -- 20-day cumulative log return ending at Friday of week T
+        mean_vol_5d  -- 5-day rolling mean volume ending at Friday of week T
+        mean_vol_20d -- 20-day rolling mean volume ending at Friday of week T
         volume_ratio -- mean_vol_5d / mean_vol_20d
 
-    For each Monday in weekly_rv.index (week T), values are taken from the last available
-    trading day before that Monday via reindex with forward-fill to the preceding Sunday.
+    For each Monday in weekly_rv.index (week T), values are taken from Friday of week T
+    (Monday + 4 days) via reindex with forward-fill.
 
     log_returns: shape (num_trading_days, num_stocks) -- daily log returns.
     volume: shape (num_trading_days, num_stocks) -- daily trading volume.
@@ -158,7 +158,7 @@ def zscore_cross_sectional(df: pd.DataFrame) -> pd.DataFrame:
     Returns: same shape as input.
     """
     mean = df.mean(axis=1)
-    std = df.std(axis=1)
+    std = df.std(axis=1).replace(0.0, np.nan)  # avoid division by zero if all stocks identical
     result = df.sub(mean, axis=0).div(std, axis=0)
     assert result.shape == df.shape, (
         f"zscore_cross_sectional: shape changed from {df.shape} to {result.shape}"
@@ -216,7 +216,7 @@ def build_feature_tensor(
             assert abs(np.nanmean(vals)) < 0.01, (
                 f"Mean not near zero at week {t}, feature {fname}: {np.nanmean(vals):.4f}"
             )
-            assert abs(np.nanstd(vals) - 1.0) < 0.05, (
+            assert abs(np.nanstd(vals, ddof=1) - 1.0) < 0.05, (
                 f"Std not near 1 at week {t}, feature {fname}: {np.nanstd(vals):.4f}"
             )
             assert np.nanmax(np.abs(vals)) < config.NORM_MAX_ABS, (

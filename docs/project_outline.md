@@ -64,9 +64,9 @@ Daily OHLCV data from yfinance (free, reliable for historical S&P 500 data). Poi
 
 ### Target Variable: Weekly Realized Volatility
 
-For each stock and each calendar week, realized volatility (RV) is computed as the annualized standard deviation of the five daily log returns within that week:
+For each stock and each calendar week, realized volatility (RV) is computed as the annualized standard deviation of the daily log returns within that week. Weeks with fewer than 3 trading days are excluded.
 
-| **Formula** | RV(t) = std(r_t1, r_t2, r_t3, r_t4, r_t5) × sqrt(252) where r = daily log return |
+| **Formula** | RV(t) = std(r_t1, ..., r_tn) × sqrt(252), n ≥ 3, where r = daily log return |
 |---|---|
 
 The prediction target for week T is RV computed from week T+1 — strictly future data. This shift must be implemented and audited carefully to prevent lookahead bias. Every row in the target dataframe is verified by hand-tracing 5 observations from raw price to target value.
@@ -182,7 +182,7 @@ GraphSAGE is selected over alternatives (GCN, GAT, GIN) for the following reason
 - Early stopping: patience = 10 epochs based on validation MSE
 - Batch structure: one time step (all 462 stocks) = one forward pass. Iterate chronologically over all training weeks.
 - Hardware: Google Colab A100 GPU (40GB VRAM)
-- Random seeds: fix random seed = 42 for Python, NumPy, and PyTorch at the start of every training script. Store RANDOM_SEED = 42 in config.py. This applies to all five models.
+- Random seeds: fix random seed = 22 for Python, NumPy, and PyTorch at the start of every training script. Store RANDOM_SEED = 22 in config.py. This applies to all five models.
 
 ## 5. Baselines
 
@@ -292,7 +292,7 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 - Verify Colab connects to Drive and can read/write to sp500-gnn/
 - Install all dependencies: yfinance, PyTorch Geometric, statsmodels, pyarrow, pandas-datareader (for FRED T-bill data)
 - Confirm PyTorch detects A100 GPU via torch.cuda.is_available()
-- Set random seeds at top of script: random.seed(42), np.random.seed(42), torch.manual_seed(42), torch.cuda.manual_seed_all(42)
+- Set random seeds at top of script: random.seed(22), np.random.seed(22), torch.manual_seed(22), torch.cuda.manual_seed_all(22)
 
 | **Output** | Initialized repo. config.py populated. GPU confirmed. Seeds set. |
 |---|---|
@@ -323,7 +323,7 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 ### Task 1.4 — Weekly Realized Volatility
 
 - Implement compute_weekly_rv() in src/data.py
-- Group daily log returns by ISO week. For each week and each stock, compute std of 5 daily returns × sqrt(252)
+- Group daily log returns by ISO week. For each week and each stock with ≥ 3 trading days, compute std of daily returns × sqrt(252)
 - Result shape: (num_weeks, num_stocks)
 - Save as data/raw/weekly_rv.parquet
 - Verify: annualized RV should average 0.15–0.25 for most stocks. Week of March 16 2020 should show RV of 0.80–1.50+ for most names. Plot RV time series for 5 stocks.
