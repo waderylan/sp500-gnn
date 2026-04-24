@@ -73,14 +73,13 @@ def train_lstm(
     best_path = ckpt_dir / "lstm_best.pt"
 
     def _valid_positions(pos_arr: np.ndarray) -> list[int]:
-        """Keep positions with a full sequence and no NaN in features or target."""
+        """Keep positions with a full sequence and no NaN in features.
+        Target NaN values are handled per-stock via masking in the loss."""
         out = []
         for p in pos_arr:
             if p < seq_len - 1:
                 continue
             if np.isnan(features[p - seq_len + 1 : p + 1]).any():
-                continue
-            if np.isnan(target[p]).any():
                 continue
             out.append(int(p))
         return out
@@ -108,8 +107,9 @@ def train_lstm(
             assert x.shape[1:] == (seq_len, features.shape[2]), \
                 f"Seq shape mismatch at p={p}: {x.shape}"
             y = torch.tensor(target[p], dtype=torch.float32).to(device)
+            mask = ~y.isnan()
             optimizer.zero_grad()
-            loss = criterion(model(x), y)
+            loss = criterion(model(x)[mask], y[mask])
             loss.backward()
             optimizer.step()
             train_loss_sum += loss.item()
@@ -121,8 +121,9 @@ def train_lstm(
             for p in val_valid:
                 seq = features[p - seq_len + 1 : p + 1]
                 x   = torch.tensor(seq, dtype=torch.float32).permute(1, 0, 2).to(device)
-                y   = torch.tensor(target[p], dtype=torch.float32).to(device)
-                val_loss_sum += criterion(model(x), y).item()
+                y    = torch.tensor(target[p], dtype=torch.float32).to(device)
+                mask = ~y.isnan()
+                val_loss_sum += criterion(model(x)[mask], y[mask]).item()
 
         avg_train = train_loss_sum / len(train_valid)
         avg_val   = val_loss_sum   / len(val_valid)
@@ -198,11 +199,13 @@ def train_gnn(
     val_weeks   = set(splits.loc[splits["split"] == "val",   "week"])
 
     def _valid_positions(week_set: set) -> list[tuple[int, pd.Timestamp]]:
+        """Keep weeks with no NaN in features.
+        Target NaN values are handled per-stock via masking in the loss."""
         out = []
         for i, w in enumerate(week_index):
             if w not in week_set:
                 continue
-            if np.isnan(features[i]).any() or np.isnan(target[i]).any():
+            if np.isnan(features[i]).any():
                 continue
             out.append((i, w))
         return out
@@ -227,8 +230,9 @@ def train_gnn(
             x   = torch.tensor(features[pos], dtype=torch.float32).to(device)
             y   = torch.tensor(target[pos],   dtype=torch.float32).to(device)
             ei  = edge_index_fn(week).to(device)
+            mask = ~y.isnan()
             optimizer.zero_grad()
-            loss = criterion(model(x, ei), y)
+            loss = criterion(model(x, ei)[mask], y[mask])
             loss.backward()
             optimizer.step()
             train_loss_sum += loss.item()
@@ -240,7 +244,8 @@ def train_gnn(
                 x  = torch.tensor(features[pos], dtype=torch.float32).to(device)
                 y  = torch.tensor(target[pos],   dtype=torch.float32).to(device)
                 ei = edge_index_fn(week).to(device)
-                val_loss_sum += criterion(model(x, ei), y).item()
+                mask = ~y.isnan()
+                val_loss_sum += criterion(model(x, ei)[mask], y[mask]).item()
 
         avg_train = train_loss_sum / len(train_steps)
         avg_val   = val_loss_sum   / len(val_steps)
@@ -536,7 +541,7 @@ def predict_gnn_val(
         for i, week in enumerate(week_index):
             if week not in val_weeks:
                 continue
-            if np.isnan(features[i]).any() or np.isnan(target[i]).any():
+            if np.isnan(features[i]).any():
                 continue
             x    = torch.tensor(features[i], dtype=torch.float32).to(device)
             ei   = edge_index_fn(week).to(device)

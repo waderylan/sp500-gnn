@@ -1,5 +1,5 @@
 # Development mode — set to None to use the full universe
-DEV_UNIVERSE_SIZE = 50
+DEV_UNIVERSE_SIZE = None
 
 # Reproducibility
 RANDOM_SEED = 22
@@ -7,10 +7,6 @@ RANDOM_SEED = 22
 # Data download date range
 DATA_START = "2015-01-01"
 DATA_END   = "2025-12-31"
-
-# Universe construction filters
-UNIVERSE_ADDED_BEFORE       = "2016-01-01"   # exclude stocks added on or after this date
-UNIVERSE_NOT_REMOVED_BEFORE = "2024-12-01"   # exclude stocks removed before this date
 
 # Train / val / test split boundaries (inclusive end dates)
 TRAIN_END = "2022-12-31"
@@ -24,7 +20,7 @@ MIN_COVERAGE = 0.95                  # fraction of trading days a stock must hav
 WINSORIZE_CLIP = (0.01, 0.99)        # cross-sectional winsorization percentiles
 # With DEV_UNIVERSE_SIZE=50 the 1%/99% clip bites <1 stock per tail, so post-z-score
 # extremes can reach ~6. With the full universe (~462 stocks) this can be tightened to 5.0.
-NORM_MAX_ABS   = 6.0
+NORM_MAX_ABS   = 5.0
 
 # Portfolio construction
 MAX_WEIGHT           = 0.05          # maximum single-stock weight after normalization
