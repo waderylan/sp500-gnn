@@ -73,16 +73,9 @@ def train_lstm(
     best_path = ckpt_dir / "lstm_best.pt"
 
     def _valid_positions(pos_arr: np.ndarray) -> list[int]:
-        """Keep positions with a full sequence and no NaN in features.
-        Target NaN values are handled per-stock via masking in the loss."""
-        out = []
-        for p in pos_arr:
-            if p < seq_len - 1:
-                continue
-            if np.isnan(features[p - seq_len + 1 : p + 1]).any():
-                continue
-            out.append(int(p))
-        return out
+        """Keep positions where the preceding sequence window exists.
+        Per-stock NaN masking is applied inside the training loop."""
+        return [int(p) for p in pos_arr if p >= seq_len - 1]
 
     train_valid = _valid_positions(train_pos)
     val_valid   = _valid_positions(val_pos)
@@ -100,33 +93,57 @@ def train_lstm(
     for epoch in range(config.LSTM_MAX_EPOCHS):
         # Training pass — chronological order
         model.train()
-        train_loss_sum = 0.0
+        train_loss_sum  = 0.0
+        train_steps_used = 0
         for p in train_valid:
             seq = features[p - seq_len + 1 : p + 1]       # (seq_len, S, F)
-            x   = torch.tensor(seq, dtype=torch.float32).permute(1, 0, 2).to(device)
+            # Per-stock NaN mask: True = stock has NaN anywhere in its feature window
+            stock_nan = np.isnan(seq).any(axis=(0, 2))    # (S,)
+            seq_clean = seq.copy()
+            seq_clean[:, stock_nan, :] = 0.0              # zero-fill; excluded from loss
+            x = torch.tensor(seq_clean, dtype=torch.float32).permute(1, 0, 2).to(device)
             assert x.shape[1:] == (seq_len, features.shape[2]), \
                 f"Seq shape mismatch at p={p}: {x.shape}"
             y = torch.tensor(target[p], dtype=torch.float32).to(device)
-            mask = ~y.isnan()
+            feat_mask = torch.tensor(~stock_nan, dtype=torch.bool, device=device)
+            mask = feat_mask & ~y.isnan()
+            if not mask.any():
+                continue
             optimizer.zero_grad()
             loss = criterion(model(x)[mask], y[mask])
             loss.backward()
             optimizer.step()
             train_loss_sum += loss.item()
+            train_steps_used += 1
 
         # Validation pass
         model.eval()
-        val_loss_sum = 0.0
+        val_loss_sum  = 0.0
+        val_steps_used = 0
         with torch.no_grad():
             for p in val_valid:
                 seq = features[p - seq_len + 1 : p + 1]
-                x   = torch.tensor(seq, dtype=torch.float32).permute(1, 0, 2).to(device)
-                y    = torch.tensor(target[p], dtype=torch.float32).to(device)
-                mask = ~y.isnan()
+                stock_nan = np.isnan(seq).any(axis=(0, 2))
+                seq_clean = seq.copy()
+                seq_clean[:, stock_nan, :] = 0.0
+                x = torch.tensor(seq_clean, dtype=torch.float32).permute(1, 0, 2).to(device)
+                y = torch.tensor(target[p], dtype=torch.float32).to(device)
+                feat_mask = torch.tensor(~stock_nan, dtype=torch.bool, device=device)
+                mask = feat_mask & ~y.isnan()
+                if not mask.any():
+                    continue
                 val_loss_sum += criterion(model(x)[mask], y[mask]).item()
+                val_steps_used += 1
 
-        avg_train = train_loss_sum / len(train_valid)
-        avg_val   = val_loss_sum   / len(val_valid)
+        if train_steps_used == 0 or val_steps_used == 0:
+            raise RuntimeError(
+                f"Epoch {epoch + 1}: no valid steps "
+                f"(train={train_steps_used}, val={val_steps_used}). "
+                "Check features.parquet for excessive NaN coverage."
+            )
+
+        avg_train = train_loss_sum / train_steps_used
+        avg_val   = val_loss_sum   / val_steps_used
         val_loss_history.append(avg_val)
         scheduler.step(avg_val)
 
