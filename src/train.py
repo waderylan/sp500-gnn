@@ -66,6 +66,7 @@ def train_lstm(
     all computed from data through Friday of week p. Target is week p+1's RV.
     Friday_p < Monday_{p+1}.
     """
+    set_seeds()
     seq_len  = config.LSTM_SEQ_LEN
     ckpt_dir = Path(config.CHECKPOINTS_DIR)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -324,9 +325,10 @@ def train_gnn_corr_ablation(
         set_seeds()
         model = GNNModel(in_channels=in_channels).to(device)
 
-        # Default arg captures theta at definition time — avoids loop closure bug
+        # Pass Friday of week T (week + 4 days) so the 252-day window ends at the
+        # last trading day of the current week, matching the feature pipeline.
         edge_fn = lambda week, th=theta: build_correlation_graph(
-            log_returns, week, config.CORR_LOOKBACK_DAYS, th
+            log_returns, week + pd.Timedelta(days=4), config.CORR_LOOKBACK_DAYS, th
         )
 
         graph_tag = f"corr_th{int(theta * 10):02d}"
@@ -538,7 +540,7 @@ def predict_gnn_val(
                 continue
             x    = torch.tensor(features[i], dtype=torch.float32).to(device)
             ei   = edge_index_fn(week).to(device)
-            pred = model(x, ei).cpu().numpy()
+            pred = np.clip(model(x, ei).cpu().numpy(), a_min=1e-6, a_max=None)
             rows.append(pred)
             index.append(week)
 

@@ -31,7 +31,7 @@ MAX_WEIGHT           = 0.05          # maximum single-stock weight after normali
 TRANSACTION_COST_BPS = 10            # one-way cost in basis points
 
 # Graph construction — correlation
-CORR_THRESHOLD    = 0.5             # edge threshold θ (tuned on val; ablation: {0.3, 0.5, 0.7})
+CORR_THRESHOLD    = 0.3             # edge threshold θ — set to ablation winner (see corr_threshold_ablation.json)
 CORR_LOOKBACK_DAYS = 252            # rolling lookback window for correlation graph
 CORR_ABLATION_THRESHOLDS = [0.3, 0.5, 0.7]  # θ values tested in the ablation study
 

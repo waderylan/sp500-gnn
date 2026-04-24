@@ -53,10 +53,36 @@ def compute_sector_metrics(
     y_true: ndarray of shape (num_weeks, num_stocks).
     y_pred: ndarray of same shape.
     tickers: ordered list of ticker symbols (column order of y_true/y_pred).
-    sector_map: dict mapping ticker -> sector name.
-    Returns DataFrame with columns ['sector', 'mse', 'mae', 'r2'], one row per sector.
+    sector_map: dict mapping ticker -> sector name. Tickers absent from the map are skipped.
+    Returns DataFrame with columns ['sector', 'n_stocks', 'mse', 'mae', 'r2'], one row per sector,
+    sorted by MSE descending.
+
+    Shape assertions: y_true.shape == y_pred.shape, y_true.ndim == 2,
+                      y_true.shape[1] == len(tickers).
+    Lookahead safety: pure arithmetic on pre-computed arrays, no date indexing.
     """
-    raise NotImplementedError
+    assert y_true.shape == y_pred.shape, (
+        f"Shape mismatch: {y_true.shape} vs {y_pred.shape}"
+    )
+    assert y_true.ndim == 2, f"Expected 2D arrays, got ndim={y_true.ndim}"
+    assert y_true.shape[1] == len(tickers), (
+        f"y_true has {y_true.shape[1]} columns but len(tickers)={len(tickers)}"
+    )
+
+    sectors = sorted({s for s in sector_map.values() if s is not None})
+    rows: list[dict] = []
+    for sector in sectors:
+        col_indices = [i for i, t in enumerate(tickers) if sector_map.get(t) == sector]
+        if not col_indices:
+            continue
+        metrics = compute_metrics(y_true[:, col_indices], y_pred[:, col_indices])
+        rows.append({"sector": sector, "n_stocks": len(col_indices), **metrics})
+
+    df = pd.DataFrame(rows, columns=["sector", "n_stocks", "mse", "mae", "r2"])
+    df = df.sort_values("mse", ascending=False).reset_index(drop=True)
+
+    assert df.shape[1] == 5, f"Expected 5 columns, got {df.shape[1]}"
+    return df
 
 
 def compare_models(results: dict[str, dict[str, float]]) -> pd.DataFrame:
@@ -149,7 +175,7 @@ def compile_validation_summary(
         target=target,
         week_index=week_index,
         edge_index_fn=lambda week: build_correlation_graph(
-            log_returns, week, config.CORR_LOOKBACK_DAYS, best_theta
+            log_returns, week + pd.Timedelta(days=4), config.CORR_LOOKBACK_DAYS, best_theta
         ),
         splits=splits,
         tickers=tickers,
