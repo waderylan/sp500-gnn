@@ -64,6 +64,18 @@ State:
 
 ---
 
+## Full Universe Run — In Progress
+
+DEV_UNIVERSE_SIZE is now None (465 stocks). All notebooks must be re-run end-to-end on the full universe before Phase 5 begins.
+
+- [x] `notebooks/01_data.ipynb`
+- [ ] `notebooks/02_features.ipynb`
+- [ ] `notebooks/03_graphs.ipynb`
+- [ ] `notebooks/04_baseline_models.ipynb`
+- [ ] `notebooks/04_gnn_models.ipynb`
+
+---
+
 ## Task Checklist
 
 Each task is complete only when: (1) src/ code written, (2) notebook cells filled and runnable, (3) output file(s) saved and verified.
