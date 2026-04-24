@@ -8,7 +8,8 @@
       "Bash(python -c \"import sys,json; nb=json.load\\(sys.stdin\\); cell=nb['cells'][9]; [print\\(o.get\\('text',''\\)\\) for o in cell.get\\('outputs',[]\\)]\")",
       "Bash(python -c ' *)",
       "Bash(python *)",
-      "Bash(.venv/Scripts/python -c ' *)"
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }
