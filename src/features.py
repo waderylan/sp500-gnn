@@ -78,9 +78,9 @@ def compute_return_volume_features(
     Features (5 total):
         momentum_5d  -- 5-day cumulative log return ending at Friday of week T
         momentum_20d -- 20-day cumulative log return ending at Friday of week T
-        mean_vol_5d  -- 5-day rolling mean volume ending at Friday of week T
-        mean_vol_20d -- 20-day rolling mean volume ending at Friday of week T
-        volume_ratio -- mean_vol_5d / mean_vol_20d
+        mean_vol_5d  -- log of 5-day rolling mean volume ending at Friday of week T
+        mean_vol_20d -- log of 20-day rolling mean volume ending at Friday of week T
+        volume_ratio -- (5d mean volume) / (20d mean volume), ratio in original space
 
     For each Monday in weekly_rv.index (week T), values are taken from Friday of week T
     (Monday + 4 days) via reindex with forward-fill.
@@ -110,11 +110,17 @@ def compute_return_volume_features(
     aligned["momentum_5d"]  = _align(log_returns.rolling(5).sum())
     aligned["momentum_20d"] = _align(log_returns.rolling(20).sum())
 
-    vol_5d  = _align(volume.rolling(5).mean())
-    vol_20d = _align(volume.rolling(20).mean())
-    aligned["mean_vol_5d"]  = vol_5d
-    aligned["mean_vol_20d"] = vol_20d
-    aligned["volume_ratio"] = vol_5d / vol_20d.replace(0.0, np.nan)
+    # Zero-volume days (halted stocks, data gaps) are not valid observations.
+    # Treat them as NaN so rolling means are computed over real trading days only.
+    volume_clean = volume.where(volume > 0, np.nan)
+
+    vol_5d_raw  = _align(volume_clean.rolling(5).mean())
+    vol_20d_raw = _align(volume_clean.rolling(20).mean())
+    # Cross-sectional volume spans many orders of magnitude (mega-cap vs small-cap).
+    # Log-transform makes the distribution approximately normal before winsorization.
+    aligned["mean_vol_5d"]  = np.log(vol_5d_raw)
+    aligned["mean_vol_20d"] = np.log(vol_20d_raw)
+    aligned["volume_ratio"] = vol_5d_raw / vol_20d_raw.replace(0.0, np.nan)
 
     result = pd.concat(aligned, axis=1)  # MultiIndex columns: (feature_name, ticker)
 

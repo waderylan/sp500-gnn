@@ -20,7 +20,7 @@ MIN_COVERAGE = 0.95                  # fraction of trading days a stock must hav
 WINSORIZE_CLIP = (0.01, 0.99)        # cross-sectional winsorization percentiles
 # With DEV_UNIVERSE_SIZE=50 the 1%/99% clip bites <1 stock per tail, so post-z-score
 # extremes can reach ~6. With the full universe (~462 stocks) this can be tightened to 5.0.
-NORM_MAX_ABS   = 5.0
+NORM_MAX_ABS   = 6.0
 
 # Portfolio construction
 MAX_WEIGHT           = 0.05          # maximum single-stock weight after normalization

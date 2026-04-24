@@ -100,9 +100,11 @@ This project uses **1-step-ahead prediction**: features at row T are computed fr
 
 ### Volume Features
 
-- Rolling mean volume over 5 days
-- Rolling mean volume over 20 days
-- Volume ratio: 5-day mean volume / 20-day mean volume
+- Log of rolling mean volume over 5 days (log-transformed after computing the 5-day mean)
+- Log of rolling mean volume over 20 days (log-transformed after computing the 20-day mean)
+- Volume ratio: 5-day mean volume / 20-day mean volume (ratio in original space, not log-transformed)
+
+> **NOTE ON VOLUME PREPROCESSING:** Zero-volume days (trading halts, data gaps) are replaced with NaN before computing rolling means so they do not count as real observations. The rolling means for mean_vol_5d and mean_vol_20d are then log-transformed because cross-sectional volume spans many orders of magnitude (mega-cap vs. small-cap) and is highly right-skewed; log-transform makes the distribution approximately normal before winsorization and z-scoring. The volume_ratio feature is left in original space since it is already bounded near 1 and does not exhibit the same skew.
 
 ### Cross-Sectional Normalization
 
@@ -373,8 +375,8 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 
 - Download and save volume data to data/raw/volume.parquet via download_volume() in src/data.py
 - Implement price momentum over 5 and 20 days (5-day and 20-day cumulative log return)
-- Implement rolling mean volume over 5 and 20 days
-- Implement volume ratio: 5-day mean volume / 20-day mean volume
+- Implement rolling mean volume over 5 and 20 days; replace zero-volume days with NaN before rolling (halts and data gaps are not valid observations); log-transform the resulting means before winsorization
+- Implement volume ratio: 5-day mean volume / 20-day mean volume (ratio in original space, not log-transformed)
 - All windows lagged: values at week T use only data from trading days strictly before Monday_T
 
 | **Output** | 5 return and volume feature arrays aligned to weekly index |
