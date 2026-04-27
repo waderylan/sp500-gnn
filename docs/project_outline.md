@@ -167,24 +167,65 @@ GraphSAGE is selected over alternatives (GCN, GAT, GIN) for the following reason
 
 ### Full Architecture
 
+The architecture below reflects the tuned configuration selected by grid search (Task 4.4b). The original architecture used 2 layers and hidden dim 64; the tuned version uses 3 layers and hidden dim 128. Both are implemented in `src/models.py` as `GNNModel` (original) and `GNNModelV2` (tunable). All reported results use the tuned architecture.
+
 | **Layer** | **Output Shape** | **Notes** |
 |---|---|---|
-| Input | (462, F) | F = number of features per stock per week |
-| SAGEConv 1 + ReLU + Dropout | (462, 64) | Hidden dim = 64, dropout = 0.3 |
-| SAGEConv 2 + ReLU + Dropout | (462, 64) | Second message-passing layer |
-| Linear | (462, 1) | Per-stock scalar prediction |
-| Output | (462,) | Predicted next-week RV per stock |
+| Input | (465, F) | F = 10 features per stock per week |
+| SAGEConv 1 + ReLU + Dropout | (465, 128) | Hidden dim = 128, dropout = 0.3 |
+| SAGEConv 2 + ReLU + Dropout | (465, 128) | Second message-passing layer |
+| SAGEConv 3 + ReLU + Dropout | (465, 128) | Third message-passing layer; selected by grid search |
+| Linear | (465, 1) | Per-stock scalar prediction |
+| Output | (465,) | Predicted next-week RV per stock |
 
 ### Training Configuration
 
 - Loss function: Mean Squared Error (MSE) against next-week realized volatility
-- Optimizer: Adam, learning rate = 0.001
+- Optimizer: Adam, learning rate = 3e-4 for GNN (LSTM uses 1e-3; kept separate in config.py)
 - LR scheduler: ReduceLROnPlateau — halve LR if validation loss does not improve for 5 epochs
-- Regularization: Dropout 0.3 after each GNN layer
+- Regularization: Dropout 0.3 after each GNN layer; no batch normalization (see grid search results below)
 - Early stopping: patience = 10 epochs based on validation MSE
-- Batch structure: one time step (all 462 stocks) = one forward pass. Iterate chronologically over all training weeks.
+- Batch structure: one time step (all 465 stocks) = one forward pass. Iterate chronologically over all training weeks.
 - Hardware: Google Colab A100 GPU (40GB VRAM)
 - Random seeds: fix random seed = 22 for Python, NumPy, and PyTorch at the start of every training script. Store RANDOM_SEED = 22 in config.py. This applies to all five models.
+
+### Hyperparameter Search
+
+Architecture and training hyperparameters for GNN-Correlation were selected by exhaustive grid search on the 2023 validation set, fixed at the winning correlation threshold θ=0.3. The search used `GNNModelV2`, a parameterized extension of the base GraphSAGE architecture supporting variable depth and optional batch normalization. All other components (graph construction, optimizer, LR scheduler, loss function, chronological iteration) were held constant during the search.
+
+**Grid (48 configurations):**
+
+| Hyperparameter | Values searched |
+|---|---|
+| Learning rate | 3e-4, 1e-3, 3e-3 |
+| Hidden dim | 64, 128 |
+| Dropout | 0.1, 0.3 |
+| Batch normalization | True, False |
+| Number of SAGEConv layers | 2, 3 |
+
+Early stopping patience was reduced from 10 to 7 epochs during the search to limit wall time. Each configuration used a precomputed correlation graph dictionary (no recomputation per step). Total search time: approximately 3 hours on an A100 GPU.
+
+**Results (top 5 by validation MSE):**
+
+| Rank | lr | hidden_dim | dropout | batch_norm | num_layers | val MSE |
+|---|---|---|---|---|---|---|
+| 1 | 3e-4 | 128 | 0.3 | False | 3 | 0.019589 |
+| 2 | 1e-3 | 128 | 0.3 | False | 3 | 0.019679 |
+| 3 | 3e-3 | 128 | 0.1 | False | 3 | 0.019681 |
+| 4 | 1e-3 | 64 | 0.1 | False | 3 | 0.019684 |
+| 5 | 1e-3 | 64 | 0.3 | False | 3 | 0.019710 |
+
+Baseline (original 2-layer, hidden=64, lr=1e-3): val MSE = 0.019778.
+
+**Key findings:**
+
+- `num_layers=3` appears in all top 5 configurations. This is the dominant signal. A third message-passing hop expands each node's receptive field, which is particularly beneficial on a dense correlation graph where information propagates through multiple intermediary stocks.
+- `batch_norm=False` appears in all top 5. Batch normalization hurt performance across the board. The likely cause: the correlation graph density varies by an order of magnitude between calm and crisis weeks (sparse in 2017, near-fully-connected during March 2020). Running statistics learned during training do not transfer to these structurally different graph regimes, causing BatchNorm1d to distort node embeddings.
+- `hidden_dim=128` is the best single config but 64 appears in positions 3 and 4. This is a secondary effect; depth matters more than width on this dataset.
+- `lr=3e-4` wins the top slot but `lr=1e-3` (the original) appears in 3 of the top 5. Learning rate has lower impact than depth.
+- The improvement from grid search is 1.0% MSE reduction (0.019778 → 0.019589). The DM test in Phase 5 determines whether this is statistically significant against the baselines.
+
+**Reporting note:** 48 configurations were evaluated on the validation set to select the architecture. This counts toward the total number of hyperparameter decisions made on validation data and should be disclosed in the Experiments section alongside the correlation threshold ablation (3 configurations) and the Granger correction method selection (1 decision). Total validation consultations: 52.
 
 ## 5. Baselines
 
@@ -250,7 +291,7 @@ The project uses a hybrid notebook + module structure. Notebooks serve as orches
 | src/data.py | Price download, log return computation, weekly RV computation, train/val/test splitting. |
 | src/features.py | All feature engineering: volatility windows, return features, volume features, winsorization, cross-sectional z-scoring. |
 | src/graphs.py | Three graph constructors: build_correlation_graph(), build_sector_graph(), build_granger_graph(). Each returns a PyG-compatible edge index. Includes make_pyg_data() helper. Also provides precompute_corr_graphs() and load_corr_graphs() for disk-cached correlation graphs — see Precomputed Correlation Graphs section below. |
-| src/models.py | HAR model (sklearn, per-stock and pooled), LSTM model (PyTorch), GNN model (PyTorch Geometric GraphSAGE). All model class definitions. |
+| src/models.py | HAR model (sklearn, per-stock and pooled), LSTM model (PyTorch), GNN model (PyTorch Geometric GraphSAGE). `GNNModel` is the original 2-layer fixed architecture. `GNNModelV2` is the parameterized version used for hyperparameter search and all final evaluations. |
 | src/train.py | Training loops for LSTM and GNN. Handles chronological iteration, early stopping, checkpoint saving, and validation logging. |
 | src/evaluate.py | MSE, MAE, R-squared computation. Sector-level breakdown. Results table generation. |
 | src/portfolio.py | Inverse-volatility portfolio construction, weight capping, weekly rebalancing simulation, transaction cost application, Sharpe/drawdown computation. Fetches T-bill rates from FRED for risk-free rate. |
@@ -259,7 +300,8 @@ The project uses a hybrid notebook + module structure. Notebooks serve as orches
 | 02_features.ipynb | Runs features.py. Verifies normalization and winsorization. Shows feature correlation heatmap. |
 | 03_graphs.ipynb | Runs graphs.py. Visualizes all three graphs for a sample week. Reports density statistics. Verifies SAGEConv directionality behavior. |
 | 04_baseline_models.ipynb | Trains HAR (per-stock and pooled) and LSTM baselines. Saves predictions and checkpoints. Logs validation loss curves and directional accuracy. |
-| 04_gnn_models.ipynb | Implements and verifies GNNModel forward pass. Trains GNN-Correlation, GNN-Sector, and GNN-Granger. Saves checkpoints and produces validation summary. |
+| 04_gnn_models.ipynb | Implements and verifies GNNModel forward pass. Trains GNN-Correlation (threshold ablation), GNN-Sector, and GNN-Granger. Saves checkpoints and produces validation summary. |
+| 04b_gnn_hparam_search.ipynb | Grid search over GNN-Correlation hyperparameters using GNNModelV2. 48 configurations. Saves winning checkpoint to gnn_corr_hparam_best.pt. Resumable after Colab timeout. |
 | 05_evaluate.ipynb | Loads checkpoints. Runs final test set evaluation. Produces ML metrics table. |
 | 06_portfolio.ipynb | Runs portfolio backtest. Produces all portfolio figures and metrics table. |
 | 07_significance.ipynb | Runs all statistical significance tests. Produces significance summary table for paper. |
@@ -625,6 +667,19 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 - Log threshold comparison results to data/results/corr_threshold_ablation.json
 
 | **Output** | gnn_corr_best.pt. Best threshold documented. |
+|---|---|
+
+### Task 4.4b — Hyperparameter Grid Search (GNN-Correlation)
+
+- Implement `GNNModelV2` in `src/models.py`: parameterized GraphSAGE supporting variable `num_layers`, `hidden_dim`, `dropout`, and `batch_norm`. Forward interface identical to `GNNModel`.
+- Implement `run_gnn_hparam_search()` in `src/train.py`: iterates over 48 configurations, trains each with reduced patience (7 epochs), saves per-config checkpoints, supports resume after Colab timeout.
+- Run from `notebooks/04b_gnn_hparam_search.ipynb`. Fixed at θ=0.3 (ablation winner). Uses precomputed correlation graphs from disk.
+- After search: copy winning checkpoint to `gnn_corr_hparam_best.pt`. Update `config.py` with winning values (HIDDEN_DIM=128, GNN_NUM_LAYERS=3, GNN_LEARNING_RATE=3e-4).
+- Update `src/evaluate.py` to load `GNNModelV2` from `gnn_corr_hparam_best.pt` for all subsequent evaluation. Fall back to original `GNNModel` if hparam checkpoint is absent.
+
+**Result:** Best config (lr=3e-4, hidden=128, dropout=0.3, batch_norm=False, num_layers=3), val MSE=0.019589 vs. baseline 0.019778.
+
+| **Output** | `gnn_corr_hparam_best.pt`. `gnn_hparam_search_results.json`. `config.py` updated. |
 |---|---|
 
 ### Task 4.5 — Train GNN-Sector
