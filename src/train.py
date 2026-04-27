@@ -216,16 +216,10 @@ def train_gnn(
     val_weeks   = set(splits.loc[splits["split"] == "val",   "week"])
 
     def _valid_positions(week_set: set) -> list[tuple[int, pd.Timestamp]]:
-        """Keep weeks with no NaN in features.
-        Target NaN values are handled per-stock via masking in the loss."""
-        out = []
-        for i, w in enumerate(week_index):
-            if w not in week_set:
-                continue
-            if np.isnan(features[i]).any():
-                continue
-            out.append((i, w))
-        return out
+        """Return (row_index, week_timestamp) pairs for weeks in the given split.
+        Feature NaN is imputed in GNNModel.forward via nan_to_num.
+        Target NaN is masked in the loss. Weeks with no valid targets are skipped in the loop."""
+        return [(i, w) for i, w in enumerate(week_index) if w in week_set]
 
     train_steps = _valid_positions(train_weeks)
     val_steps   = _valid_positions(val_weeks)
@@ -240,32 +234,50 @@ def train_gnn(
     patience_counter = 0
     val_loss_history: list[float] = []
 
+    n_train = len(train_steps)
     for epoch in range(max_epochs):
         model.train()
-        train_loss_sum = 0.0
-        for pos, week in train_steps:
-            x   = torch.tensor(features[pos], dtype=torch.float32).to(device)
-            y   = torch.tensor(target[pos],   dtype=torch.float32).to(device)
-            ei  = edge_index_fn(week).to(device)
+        train_loss_sum   = 0.0
+        train_steps_used = 0
+        for step_idx, (pos, week) in enumerate(train_steps):
+            x    = torch.tensor(features[pos], dtype=torch.float32).to(device)
+            y    = torch.tensor(target[pos],   dtype=torch.float32).to(device)
+            ei   = edge_index_fn(week).to(device)
             mask = ~y.isnan()
+            if not mask.any():
+                continue
             optimizer.zero_grad()
             loss = criterion(model(x, ei)[mask], y[mask])
             loss.backward()
             optimizer.step()
-            train_loss_sum += loss.item()
+            train_loss_sum   += loss.item()
+            train_steps_used += 1
+            if (step_idx + 1) % 50 == 0 or (step_idx + 1) == n_train:
+                print(f"  Epoch {epoch + 1}  step {step_idx + 1}/{n_train}", end="\r", flush=True)
 
         model.eval()
-        val_loss_sum = 0.0
+        val_loss_sum   = 0.0
+        val_steps_used = 0
         with torch.no_grad():
             for pos, week in val_steps:
-                x  = torch.tensor(features[pos], dtype=torch.float32).to(device)
-                y  = torch.tensor(target[pos],   dtype=torch.float32).to(device)
-                ei = edge_index_fn(week).to(device)
+                x    = torch.tensor(features[pos], dtype=torch.float32).to(device)
+                y    = torch.tensor(target[pos],   dtype=torch.float32).to(device)
+                ei   = edge_index_fn(week).to(device)
                 mask = ~y.isnan()
-                val_loss_sum += criterion(model(x, ei)[mask], y[mask]).item()
+                if not mask.any():
+                    continue
+                val_loss_sum   += criterion(model(x, ei)[mask], y[mask]).item()
+                val_steps_used += 1
 
-        avg_train = train_loss_sum / len(train_steps)
-        avg_val   = val_loss_sum   / len(val_steps)
+        if train_steps_used == 0 or val_steps_used == 0:
+            raise RuntimeError(
+                f"Epoch {epoch + 1}: no valid steps "
+                f"(train={train_steps_used}, val={val_steps_used}). "
+                "Check features.parquet for excessive NaN coverage."
+            )
+
+        avg_train = train_loss_sum / train_steps_used
+        avg_val   = val_loss_sum   / val_steps_used
         val_loss_history.append(avg_val)
         scheduler.step(avg_val)
 
@@ -557,8 +569,6 @@ def predict_gnn_val(
     with torch.no_grad():
         for i, week in enumerate(week_index):
             if week not in val_weeks:
-                continue
-            if np.isnan(features[i]).any():
                 continue
             x    = torch.tensor(features[i], dtype=torch.float32).to(device)
             ei   = edge_index_fn(week).to(device)

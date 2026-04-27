@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import warnings
+
 import torch
 import torch.nn as nn
 from torch_geometric.nn import SAGEConv
@@ -282,6 +284,12 @@ class GNNModel(nn.Module):
         Returns: Tensor of shape (num_stocks,).
         """
         num_nodes = x.shape[0]
+        if torch.isnan(x).any():
+            warnings.warn(
+                "GNNModel.forward: input features contain NaN values. "
+                "Imputing with 0 (z-score mean). Expected during warm-up weeks."
+            )
+            x = torch.nan_to_num(x, nan=0.0)
         x = self.dropout(torch.relu(self.conv1(x, edge_index)))
         x = self.dropout(torch.relu(self.conv2(x, edge_index)))
         pred = self.fc(x).squeeze(-1)   # (num_nodes,)

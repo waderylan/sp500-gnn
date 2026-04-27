@@ -212,7 +212,24 @@ def build_feature_tensor(
 
     result = np.stack(arrays, axis=2)                # (num_weeks, num_stocks, num_features)
 
-    # Post-normalization assertions at 10 random time steps past the warm-up period
+    # Assert NaN fraction stays within the warm-up budget
+    nan_mask = np.isnan(result)
+    total_nan_frac = float(nan_mask.mean())
+    if total_nan_frac > 0:
+        print(f"Feature NaN report: {total_nan_frac:.2%} of values are NaN")
+        for f_idx, fname in enumerate(feature_names):
+            feat_nan = float(nan_mask[:, :, f_idx].mean())
+            if feat_nan > 0:
+                print(f"  {fname}: {feat_nan:.2%}")
+    assert total_nan_frac < config.MAX_FEATURE_NAN_FRAC, (
+        f"Feature tensor has {total_nan_frac:.2%} NaN values "
+        f"(limit={config.MAX_FEATURE_NAN_FRAC:.0%}). "
+        "Check for data gaps beyond the expected warm-up period."
+    )
+
+    # Normalization quality check on fully non-NaN weeks only.
+    # nanmean/nanstd are intentional: they evaluate only non-NaN stocks within each week.
+    # The NaN fraction ceiling is enforced by the assertion above.
     rng = np.random.default_rng(config.RANDOM_SEED)
     eligible = [i for i in range(63, num_weeks) if not np.isnan(result[i]).any()]
     check_rows = rng.choice(eligible, size=min(10, len(eligible)), replace=False)
@@ -265,6 +282,12 @@ def save_features(
     assert df.shape == (num_weeks * num_stocks, num_feats + 2), (
         f"save_features: expected ({num_weeks * num_stocks}, {num_feats + 2}), got {df.shape}"
     )
+
+    nan_count = int(df[feature_names].isna().sum().sum())
+    if nan_count > 0:
+        nan_frac = nan_count / (len(df) * len(feature_names))
+        print(f"Saving features with {nan_count:,} NaN values ({nan_frac:.2%}) "
+              "— expected from rolling warm-up period.")
 
     os.makedirs(config.DATA_FEATURES_DIR, exist_ok=True)
     out_path = f"{config.DATA_FEATURES_DIR}/features.parquet"

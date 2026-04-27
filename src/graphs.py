@@ -60,9 +60,8 @@ def build_correlation_graph(log_returns: pd.DataFrame,
     window = log_returns.loc[:date].iloc[-lookback:]
     if len(window) < lookback:
         warnings.warn(
-            f"build_correlation_graph: only {len(window)} rows available before "
-            f"{date.date()} (requested {lookback}). "
-            "Correlation estimated on a shorter window.",
+            "build_correlation_graph: fewer than requested rows available — "
+            "correlation estimated on a shorter window (expected at dataset start).",
             stacklevel=2,
         )
 
