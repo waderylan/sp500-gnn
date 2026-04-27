@@ -33,6 +33,9 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     )
     flat_true = y_true.ravel()
     flat_pred = y_pred.ravel()
+    valid = ~(np.isnan(flat_true) | np.isnan(flat_pred))
+    flat_true = flat_true[valid]
+    flat_pred = flat_pred[valid]
     mse   = float(np.mean((flat_true - flat_pred) ** 2))
     mae   = float(np.mean(np.abs(flat_true - flat_pred)))
     ss_res = float(np.sum((flat_true - flat_pred) ** 2))
