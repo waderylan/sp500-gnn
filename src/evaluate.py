@@ -17,6 +17,32 @@ if TYPE_CHECKING:
     import torch
 
 
+def _load_gnn_model(
+    path: "Path",
+    in_channels: int,
+    device: "torch.device",
+) -> "GNNModel":
+    """
+    Load a GNNModel checkpoint, auto-detecting hidden_dim from the state dict.
+
+    SAGEConv's lin_l.weight has shape (out_channels, in_channels), so
+    out_channels = hidden_dim can be read directly without relying on config.HIDDEN_DIM.
+    Robust to config.HIDDEN_DIM changes between training and inference sessions.
+
+    path: Path to the .pt checkpoint file.
+    in_channels: Number of input features per node.
+    device: Device to map weights to.
+    Returns: GNNModel with loaded weights.
+    """
+    import torch
+    from src.models import GNNModel
+    state = torch.load(path, map_location=device, weights_only=True)
+    hidden_dim = next(v.shape[0] for k, v in state.items() if "lin_l.weight" in k)
+    model = GNNModel(in_channels=in_channels, hidden_dim=hidden_dim).to(device)
+    model.load_state_dict(state)
+    return model
+
+
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     """
     Compute MSE, MAE, and R² between true and predicted RV.
@@ -186,10 +212,7 @@ def compile_validation_summary(
             torch.load(hparam_ckpt, map_location=device, weights_only=True)
         )
     else:
-        corr_model = GNNModel(in_channels=n_feats).to(device)
-        corr_model.load_state_dict(
-            torch.load(ckpt_dir / "gnn_corr_best.pt", map_location=device, weights_only=True)
-        )
+        corr_model = _load_gnn_model(ckpt_dir / "gnn_corr_best.pt", n_feats, device)
     corr_preds = predict_gnn_val(
         model=corr_model,
         features=features,
@@ -204,10 +227,7 @@ def compile_validation_summary(
     )
 
     # GNN-Sector
-    sector_model = GNNModel(in_channels=n_feats).to(device)
-    sector_model.load_state_dict(
-        torch.load(ckpt_dir / "gnn_sector_best.pt", map_location=device, weights_only=True)
-    )
+    sector_model = _load_gnn_model(ckpt_dir / "gnn_sector_best.pt", n_feats, device)
     sector_preds = predict_gnn_val(
         model=sector_model,
         features=features,
@@ -220,10 +240,7 @@ def compile_validation_summary(
     )
 
     # GNN-Granger
-    granger_model = GNNModel(in_channels=n_feats).to(device)
-    granger_model.load_state_dict(
-        torch.load(ckpt_dir / "gnn_granger_best.pt", map_location=device, weights_only=True)
-    )
+    granger_model = _load_gnn_model(ckpt_dir / "gnn_granger_best.pt", n_feats, device)
     granger_preds = predict_gnn_val(
         model=granger_model,
         features=features,
@@ -289,3 +306,261 @@ def compile_validation_summary(
         json.dump(summary, fh, indent=2)
 
     return ranked_df, go_nogo
+
+
+def run_test_evaluation(
+    weekly_rv: pd.DataFrame,
+    target_df: pd.DataFrame,
+    features: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    splits: pd.DataFrame,
+    tickers: list[str],
+    sector_history: dict,
+    sector_graphs: dict,
+    granger_edge_index: "torch.LongTensor",
+    device: "torch.device",
+) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """
+    Generate test-set predictions for all six models, compute metrics, and save results.
+
+    Re-fits HAR models on training data (sklearn, no .pt checkpoint exists for these).
+    Loads LSTM and GNN checkpoints from config.CHECKPOINTS_DIR. GNN-Correlation uses
+    gnn_corr_hparam_best.pt (GNNModelV2) when available, else falls back to
+    gnn_corr_best.pt (GNNModel). GNN-Sector and GNN-Granger always use GNNModel with
+    hidden_dim auto-detected from the checkpoint via _load_gnn_model().
+    Correlation graphs for the test split are loaded from precomputed parquets via
+    load_corr_graphs(). Run precompute_corr_graphs() before calling this function.
+
+    weekly_rv:          shape (num_weeks, num_stocks), Monday-indexed weekly RV.
+    target_df:          shape (num_target_weeks, num_stocks), Monday-indexed target.
+    features:           ndarray of shape (num_weeks, num_stocks, num_features).
+    week_index:         DatetimeIndex aligned to features rows.
+    splits:             DataFrame with columns ['week', 'split'].
+    tickers:            ordered ticker list, length num_stocks.
+    sector_history:     {ticker: {str(year): sector_name}}.
+    sector_graphs:      {year (int): LongTensor edge_index} for all test-split years.
+    granger_edge_index: static directed LongTensor, shape (2, num_edges).
+    device:             torch.device for GNN/LSTM inference.
+
+    Returns:
+        pooled_df:   DataFrame indexed by model name, columns [mse, mae, r2, da],
+                     sorted by MSE ascending.
+        sector_dict: {model_name: DataFrame with columns [sector, n_stocks, mse, mae, r2]}.
+
+    Saves:
+        config.DATA_RESULTS_DIR / test_preds_{key}.parquet  for 6 models.
+        config.DATA_RESULTS_DIR / ml_metrics_table.csv
+
+    Shape assertions:
+        Each prediction DataFrame has shape (num_test_weeks, num_stocks).
+        pooled_df has exactly 6 rows.
+    Lookahead safety: inference accesses only features/graphs at test week T.
+    Target values (week T+1 RV) are used only for metric computation, not as inputs.
+    """
+    import json
+    import torch
+    from src.models import (
+        HARModel, HARPooled, LSTMModel, GNNModelV2,
+        compute_har_features, prepare_har_arrays,
+    )
+    from src.graphs import load_corr_graphs
+    from src.train import predict_lstm_split, predict_gnn_split
+
+    results_dir = Path(config.DATA_RESULTS_DIR)
+    ckpt_dir    = Path(config.CHECKPOINTS_DIR)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    n_feats  = features.shape[2]
+    n_stocks = len(tickers)
+
+    # Sector map at the start of 2024 (first test year); fall back to 2023 if absent.
+    def _sector(ticker: str) -> str | None:
+        hist = sector_history.get(ticker) or {}
+        return hist.get("2024") or hist.get("2023")
+
+    sector_map: dict[str, str] = {t: _sector(t) for t in tickers}
+
+    # -----------------------------------------------------------------------
+    # 1. HAR (per-stock and pooled) — re-fit on training data, predict on test
+    # -----------------------------------------------------------------------
+    rv_1w, rv_4w, rv_13w = compute_har_features(weekly_rv)
+
+    X_tr_dict, y_tr_dict, X_tr_pool, y_tr_pool, _ = prepare_har_arrays(
+        rv_1w, rv_4w, rv_13w, target_df, splits, "train"
+    )
+    har_model = HARModel()
+    har_model.fit(X_tr_dict, y_tr_dict)
+    har_pool_model = HARPooled()
+    har_pool_model.fit(X_tr_pool, y_tr_pool)
+
+    X_te_dict, _, X_te_pool, _, test_valid_index = prepare_har_arrays(
+        rv_1w, rv_4w, rv_13w, target_df, splits, "test"
+    )
+    num_test = len(test_valid_index)
+
+    har_preds_dict = har_model.predict(X_te_dict)
+    har_preds_df = pd.DataFrame(
+        {ticker: har_preds_dict[ticker] for ticker in tickers},
+        index=test_valid_index,
+    )
+
+    har_pool_arr = har_pool_model.predict(X_te_pool).reshape(num_test, n_stocks)
+    har_pool_preds_df = pd.DataFrame(har_pool_arr, index=test_valid_index, columns=tickers)
+
+    # -----------------------------------------------------------------------
+    # 2. LSTM — auto-detect hidden_dim from checkpoint
+    # -----------------------------------------------------------------------
+    _lstm_state  = torch.load(ckpt_dir / "lstm_best.pt", map_location=device, weights_only=True)
+    _lstm_hidden = _lstm_state["lstm.weight_hh_l0"].shape[0] // 4
+    lstm_model   = LSTMModel(input_size=n_feats, hidden_dim=_lstm_hidden).to(device)
+    lstm_model.load_state_dict(_lstm_state)
+    del _lstm_state
+
+    lstm_preds_df = predict_lstm_split(
+        model=lstm_model,
+        features=features,
+        week_index=week_index,
+        splits=splits,
+        tickers=tickers,
+        device=device,
+        split_name="test",
+    ).reindex(test_valid_index)
+
+    # -----------------------------------------------------------------------
+    # 3. GNN-Correlation — hparam-tuned checkpoint if available, else ablation winner
+    # -----------------------------------------------------------------------
+    ablation_data = json.load(open(results_dir / "corr_threshold_ablation.json"))
+    best_theta    = ablation_data["best_threshold"]
+    test_corr_graphs = load_corr_graphs(best_theta, "test")
+
+    hparam_ckpt = ckpt_dir / "gnn_corr_hparam_best.pt"
+    hparam_json = results_dir / "gnn_hparam_search_results.json"
+    if hparam_ckpt.exists() and hparam_json.exists():
+        hparam_cfg = json.load(open(hparam_json))["best_config"]
+        corr_model = GNNModelV2(
+            in_channels=n_feats,
+            hidden_dim=int(hparam_cfg["hidden_dim"]),
+            dropout=float(hparam_cfg["dropout"]),
+            num_layers=int(hparam_cfg["num_layers"]),
+            batch_norm=bool(hparam_cfg["batch_norm"]),
+        ).to(device)
+        corr_model.load_state_dict(
+            torch.load(hparam_ckpt, map_location=device, weights_only=True)
+        )
+        corr_label = "GNN-Correlation (tuned)"
+    else:
+        corr_model = _load_gnn_model(ckpt_dir / "gnn_corr_best.pt", n_feats, device)
+        corr_label = f"GNN-Correlation (θ={best_theta})"
+
+    corr_preds_df = predict_gnn_split(
+        model=corr_model,
+        features=features,
+        week_index=week_index,
+        edge_index_fn=lambda week, g=test_corr_graphs: g.get(
+            week, torch.zeros(2, 0, dtype=torch.long)
+        ),
+        splits=splits,
+        tickers=tickers,
+        device=device,
+        split_name="test",
+    ).reindex(test_valid_index)
+
+    # -----------------------------------------------------------------------
+    # 4. GNN-Sector
+    # -----------------------------------------------------------------------
+    sector_model = _load_gnn_model(ckpt_dir / "gnn_sector_best.pt", n_feats, device)
+    sector_preds_df = predict_gnn_split(
+        model=sector_model,
+        features=features,
+        week_index=week_index,
+        edge_index_fn=lambda week: sector_graphs[week.year],
+        splits=splits,
+        tickers=tickers,
+        device=device,
+        split_name="test",
+    ).reindex(test_valid_index)
+
+    # -----------------------------------------------------------------------
+    # 5. GNN-Granger
+    # -----------------------------------------------------------------------
+    granger_model = _load_gnn_model(ckpt_dir / "gnn_granger_best.pt", n_feats, device)
+    granger_preds_df = predict_gnn_split(
+        model=granger_model,
+        features=features,
+        week_index=week_index,
+        edge_index_fn=lambda _week: granger_edge_index,
+        splits=splits,
+        tickers=tickers,
+        device=device,
+        split_name="test",
+    ).reindex(test_valid_index)
+
+    # -----------------------------------------------------------------------
+    # Align target and current-week RV to test_valid_index
+    # -----------------------------------------------------------------------
+    target_test = target_df.reindex(test_valid_index)
+    # weekly_rv at test weeks T — reference for directional accuracy
+    rv_test = weekly_rv.reindex(test_valid_index)
+
+    # -----------------------------------------------------------------------
+    # Save prediction parquets
+    # -----------------------------------------------------------------------
+    pred_map: dict[str, pd.DataFrame] = {
+        "har":         har_preds_df,
+        "har_pooled":  har_pool_preds_df,
+        "lstm":        lstm_preds_df,
+        "gnn_corr":    corr_preds_df,
+        "gnn_sector":  sector_preds_df,
+        "gnn_granger": granger_preds_df,
+    }
+    for key, df in pred_map.items():
+        assert df.shape == (num_test, n_stocks), (
+            f"{key}: expected shape ({num_test}, {n_stocks}), got {df.shape}"
+        )
+        df.to_parquet(results_dir / f"test_preds_{key}.parquet")
+
+    # -----------------------------------------------------------------------
+    # Pooled metrics and directional accuracy
+    # -----------------------------------------------------------------------
+    y_true = target_test.values   # (num_test, n_stocks)
+    y_rv   = rv_test.values       # (num_test, n_stocks) — current-week RV
+
+    def _da(y_pred: np.ndarray) -> float:
+        """Fraction of (stock, week) pairs where predicted direction matches actual."""
+        valid = ~(np.isnan(y_true) | np.isnan(y_pred) | np.isnan(y_rv))
+        if not valid.any():
+            return float("nan")
+        return float(np.mean(
+            np.sign(y_pred[valid] - y_rv[valid]) == np.sign(y_true[valid] - y_rv[valid])
+        ))
+
+    label_map = {
+        "har":         "HAR per-stock",
+        "har_pooled":  "HAR pooled",
+        "lstm":        "LSTM",
+        "gnn_corr":    corr_label,
+        "gnn_sector":  "GNN-Sector",
+        "gnn_granger": "GNN-Granger",
+    }
+
+    pooled_rows: list[dict]                   = []
+    sector_dict: dict[str, pd.DataFrame] = {}
+
+    for key, pred_df in pred_map.items():
+        y_pred  = pred_df.values
+        metrics = compute_metrics(y_true, y_pred)
+        metrics["da"] = _da(y_pred)
+        label = label_map[key]
+        pooled_rows.append({"model": label, **metrics})
+        sector_dict[label] = compute_sector_metrics(y_true, y_pred, tickers, sector_map)
+
+    pooled_df = (
+        pd.DataFrame(pooled_rows)
+        .set_index("model")[["mse", "mae", "r2", "da"]]
+        .sort_values("mse")
+    )
+
+    assert len(pooled_df) == 6, f"Expected 6 model rows, got {len(pooled_df)}"
+
+    pooled_df.to_csv(results_dir / "ml_metrics_table.csv")
+
+    return pooled_df, sector_dict

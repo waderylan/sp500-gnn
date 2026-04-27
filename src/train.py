@@ -762,3 +762,120 @@ def run_gnn_hparam_search(
     print(f"Checkpoint   : {best_dst}")
 
     return results_df, best_config
+
+
+def predict_lstm_split(
+    model: LSTMModel,
+    features: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    splits: pd.DataFrame,
+    tickers: list[str],
+    device: torch.device,
+    split_name: str = "test",
+) -> pd.DataFrame:
+    """
+    Run inference-only LSTM pass over a named split.
+
+    At each step p, input is features[p-SEQ_LEN+1:p+1], permuted to
+    (num_stocks, SEQ_LEN, num_features). Stocks with NaN in their feature
+    window are zero-filled before the forward pass.
+
+    features:    shape (num_weeks, num_stocks, num_features)
+    week_index:  DatetimeIndex aligned to features rows
+    splits:      DataFrame with columns ['week', 'split']
+    tickers:     ordered ticker list, length num_stocks
+    device:      torch.device
+    split_name:  'train', 'val', or 'test'
+
+    Returns DataFrame of shape (num_split_weeks, num_stocks) indexed by week.
+
+    Lookahead safety: sequence at position p uses features[p-SEQ_LEN+1:p+1],
+    all from data through Friday of week p. Target is week p+1's RV.
+    Shape assertions: output.shape[1] == len(tickers), output.shape[0] > 0.
+    """
+    seq_len     = config.LSTM_SEQ_LEN
+    split_weeks = set(splits.loc[splits["split"] == split_name, "week"])
+
+    rows:  list[np.ndarray]   = []
+    index: list[pd.Timestamp] = []
+
+    model.eval()
+    with torch.no_grad():
+        for p, week in enumerate(week_index):
+            if week not in split_weeks:
+                continue
+            if p < seq_len - 1:
+                continue
+            seq = features[p - seq_len + 1 : p + 1]       # (seq_len, S, F)
+            stock_nan = np.isnan(seq).any(axis=(0, 2))     # (S,)
+            seq_clean = seq.copy()
+            seq_clean[:, stock_nan, :] = 0.0
+            x    = torch.tensor(seq_clean, dtype=torch.float32).permute(1, 0, 2).to(device)
+            pred = np.clip(model(x).cpu().numpy(), a_min=1e-6, a_max=None)
+            rows.append(pred)
+            index.append(week)
+
+    result = pd.DataFrame(rows, index=pd.DatetimeIndex(index), columns=tickers)
+
+    assert result.shape[1] == len(tickers), (
+        f"Expected {len(tickers)} columns, got {result.shape[1]}"
+    )
+    assert len(result) > 0, f"No valid {split_name} weeks found in splits"
+
+    return result
+
+
+def predict_gnn_split(
+    model: nn.Module,
+    features: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    edge_index_fn: Callable[[pd.Timestamp], torch.LongTensor],
+    splits: pd.DataFrame,
+    tickers: list[str],
+    device: torch.device,
+    split_name: str = "test",
+) -> pd.DataFrame:
+    """
+    Run inference-only GNN pass over a named split.
+
+    Generalizes predict_gnn_val to any split name. At each step calls
+    edge_index_fn(week) to get the graph for that time step.
+
+    features:      shape (num_weeks, num_stocks, num_features)
+    week_index:    DatetimeIndex aligned to features rows
+    edge_index_fn: Callable mapping pd.Timestamp to LongTensor edge_index
+    splits:        DataFrame with columns ['week', 'split']
+    tickers:       ordered ticker list, length num_stocks
+    device:        torch.device
+    split_name:    'train', 'val', or 'test'
+
+    Returns DataFrame of shape (num_split_weeks, num_stocks) indexed by week.
+
+    Lookahead safety: accesses only features[i] and edge_index_fn(week) for each
+    week i in the split. No data from later weeks is accessed.
+    Shape assertions: output.shape[1] == len(tickers), output.shape[0] > 0.
+    """
+    split_weeks = set(splits.loc[splits["split"] == split_name, "week"])
+
+    rows:  list[np.ndarray]   = []
+    index: list[pd.Timestamp] = []
+
+    model.eval()
+    with torch.no_grad():
+        for i, week in enumerate(week_index):
+            if week not in split_weeks:
+                continue
+            x    = torch.tensor(features[i], dtype=torch.float32).to(device)
+            ei   = edge_index_fn(week).to(device)
+            pred = np.clip(model(x, ei).cpu().numpy(), a_min=1e-6, a_max=None)
+            rows.append(pred)
+            index.append(week)
+
+    result = pd.DataFrame(rows, index=pd.DatetimeIndex(index), columns=tickers)
+
+    assert result.shape[1] == len(tickers), (
+        f"Expected {len(tickers)} columns, got {result.shape[1]}"
+    )
+    assert len(result) > 0, f"No valid {split_name} weeks found in splits"
+
+    return result

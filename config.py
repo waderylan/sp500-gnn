@@ -57,6 +57,7 @@ EARLY_STOP_PATIENCE     = 10        # epochs without val improvement before stop
 CHECKPOINT_EVERY_N_EPOCHS = 5
 
 # LSTM
+LSTM_HIDDEN_DIM = 64   # LSTM hidden units; not included in hparam search
 LSTM_SEQ_LEN    = 4   # weeks of feature history per input sequence
 LSTM_MAX_EPOCHS = 150  # upper bound; early stopping triggers first
 GNN_MAX_EPOCHS  = 150  # upper bound; early stopping triggers first
