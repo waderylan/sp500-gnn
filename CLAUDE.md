@@ -111,7 +111,7 @@ Each task is complete only when: (1) src/ code written, (2) notebook cells fille
 
 ### Phase 5 — Evaluation
 - [x] 5.1 Test set ML evaluation → `test_preds_*.parquet`, `ml_metrics_table.csv` · `notebooks/05_evaluate.ipynb`: display full metrics table
-- [ ] 5.2 Portfolio backtest + FRED T-bill rates → `portfolio_returns.parquet`, `portfolio_metrics_table.csv` · `notebooks/06_portfolio.ipynb`: display portfolio metrics table, cumulative return plot
+- [x] 5.2 Portfolio backtest + FRED T-bill rates → `portfolio_returns.parquet`, `portfolio_metrics_table.csv` · `notebooks/06_portfolio.ipynb`: display portfolio metrics table, cumulative return plot
 - [ ] 5.3 Significance tests (DM + BH FDR + block bootstrap) → `dm_test_results.csv`, `bootstrap_sharpe_ci.csv`, `significance_summary.csv` · `notebooks/07_significance.ipynb`: display significance summary table
 - [ ] 5.4 Figure generation (8 publication figures) · `notebooks/07_significance.ipynb`: confirm all 8 PNGs saved to `data/results/figures/`
 
