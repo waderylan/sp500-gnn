@@ -66,6 +66,7 @@ _ROOT = _Path(__file__).parent
 DATA_RAW_DIR      = str(_ROOT / "data/raw")
 DATA_FEATURES_DIR = str(_ROOT / "data/features")
 DATA_GRAPHS_DIR   = str(_ROOT / "data/graphs")
+CORR_EDGES_DIR    = str(_ROOT / "data/graphs/corr_edges")
 DATA_RESULTS_DIR  = str(_ROOT / "data/results")
 CHECKPOINTS_DIR   = str(_ROOT / "data/results/checkpoints")
 FIGURES_DIR       = str(_ROOT / "data/results/figures")

@@ -23,7 +23,6 @@ import torch.nn as nn
 
 import config
 from src.models import LSTMModel, GNNModel
-from src.graphs import build_correlation_graph
 
 
 def set_seeds() -> None:
@@ -312,7 +311,7 @@ def train_gnn_corr_ablation(
     features: np.ndarray,
     target: np.ndarray,
     week_index: pd.DatetimeIndex,
-    log_returns: pd.DataFrame,
+    corr_graphs: dict[float, dict[pd.Timestamp, torch.LongTensor]],
     splits: pd.DataFrame,
     device: torch.device,
     thresholds: list[float] | None = None,
@@ -322,8 +321,8 @@ def train_gnn_corr_ablation(
     Train GNN-Correlation for each threshold in config.CORR_ABLATION_THRESHOLDS.
 
     For each θ: sets seeds, initializes a fresh GNNModel, and calls train_gnn()
-    with edge_index_fn = build_correlation_graph(..., threshold=θ). Records the
-    best validation MSE from the saved loss JSON (the minimum over all epochs).
+    with a dict-lookup edge_fn backed by precomputed graphs. Records the best
+    validation MSE from the saved loss JSON (the minimum over all epochs).
 
     After all runs, copies the winning checkpoint to gnn_corr_best.pt and saves
     the full ablation results to DATA_RESULTS_DIR/corr_threshold_ablation.json.
@@ -331,7 +330,8 @@ def train_gnn_corr_ablation(
     features:    shape (num_weeks, num_stocks, num_features)
     target:      shape (num_weeks, num_stocks)
     week_index:  DatetimeIndex aligned to features/target rows
-    log_returns: daily log returns, used by build_correlation_graph
+    corr_graphs: {threshold: {week_timestamp: edge_index}} from load_corr_graphs().
+                 Must contain entries for both train and val weeks.
     splits:      DataFrame with columns ['week', 'split']
     device:      torch.device for computation
     thresholds:  list of θ values; defaults to config.CORR_ABLATION_THRESHOLDS
@@ -359,10 +359,9 @@ def train_gnn_corr_ablation(
         set_seeds()
         model = GNNModel(in_channels=in_channels).to(device)
 
-        # Pass Friday of week T (week + 4 days) so the 252-day window ends at the
-        # last trading day of the current week, matching the feature pipeline.
-        edge_fn = lambda week, th=theta: build_correlation_graph(
-            log_returns, week + pd.Timedelta(days=4), config.CORR_LOOKBACK_DAYS, th
+        graphs = corr_graphs[theta]
+        edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+            lambda week, g=graphs: g.get(week, torch.zeros(2, 0, dtype=torch.long))
         )
 
         graph_tag = f"corr_th{int(theta * 10):02d}"

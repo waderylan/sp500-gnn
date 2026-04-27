@@ -128,6 +128,124 @@ def save_correlation_samples(log_returns: pd.DataFrame,
     return graphs
 
 
+# ── Precomputed correlation graphs ───────────────────────────────────────────
+
+def _threshold_str(t: float) -> str:
+    """Convert threshold float to a filename-safe string: 0.3 -> 't0p3'."""
+    return "t" + f"{t:.1f}".replace(".", "p")
+
+
+def precompute_corr_graphs(
+    log_returns: pd.DataFrame,
+    splits: pd.DataFrame,
+    lookback: int = config.CORR_LOOKBACK_DAYS,
+    thresholds: list[float] | None = None,
+) -> None:
+    """
+    Compute and save correlation edge graphs for all splits and thresholds.
+
+    Iterates over every (split, threshold) pair and calls
+    build_correlation_graph() once per week. Results are saved to
+    config.CORR_EDGES_DIR / corr_edges_{split}_{tstr}.parquet.
+
+    Parquet schema: week (str, ISO date), src (int32), dst (int32).
+    One row per directed edge. Weeks with zero edges have no rows.
+
+    Files that already exist are skipped, so re-running is safe.
+
+    log_returns: daily log returns, shape (num_trading_days, num_stocks).
+    splits: DataFrame with columns ['week', 'split'].
+    lookback: rolling window length in trading days.
+    thresholds: θ values to precompute. Defaults to config.CORR_ABLATION_THRESHOLDS.
+
+    Lookahead safety: for each week T, passes Friday of week T (week + 4 days)
+    to build_correlation_graph(). Friday_T < Monday_{T+1}.
+    """
+    if thresholds is None:
+        thresholds = config.CORR_ABLATION_THRESHOLDS
+
+    os.makedirs(config.CORR_EDGES_DIR, exist_ok=True)
+
+    for split_name in ("train", "val", "test"):
+        split_weeks = sorted(splits.loc[splits["split"] == split_name, "week"].tolist())
+        if not split_weeks:
+            raise ValueError(f"No weeks found for split '{split_name}' in splits DataFrame")
+
+        for threshold in thresholds:
+            tstr = _threshold_str(threshold)
+            out_path = os.path.join(config.CORR_EDGES_DIR,
+                                    f"corr_edges_{split_name}_{tstr}.parquet")
+
+            if os.path.exists(out_path):
+                print(f"  {split_name}/{tstr}: already exists, skipping")
+                continue
+
+            print(f"  {split_name}/{tstr}: {len(split_weeks)} weeks ...", end=" ", flush=True)
+            frames = []
+            for week in split_weeks:
+                friday = week + pd.Timedelta(days=4)
+                ei = build_correlation_graph(log_returns, friday, lookback, threshold)
+                if ei.shape[1] > 0:
+                    n = ei.shape[1]
+                    frames.append(pd.DataFrame({
+                        "week": np.full(n, str(week.date())),
+                        "src":  ei[0].numpy().astype(np.int32),
+                        "dst":  ei[1].numpy().astype(np.int32),
+                    }))
+
+            if frames:
+                df = pd.concat(frames, ignore_index=True)
+            else:
+                df = pd.DataFrame({"week": pd.Series(dtype=str),
+                                   "src":  pd.Series(dtype="int32"),
+                                   "dst":  pd.Series(dtype="int32")})
+            df.to_parquet(out_path, index=False)
+            print(f"{len(df):,} edges saved")
+
+    print("precompute_corr_graphs: done.")
+
+
+def load_corr_graphs(
+    threshold: float,
+    split_name: str,
+) -> dict[pd.Timestamp, torch.LongTensor]:
+    """
+    Load precomputed correlation graphs for one (threshold, split) pair.
+
+    Returns a dict mapping each week's Monday timestamp to a LongTensor
+    edge_index of shape (2, num_edges). Weeks with zero edges are absent
+    from the dict; callers should use .get(week, torch.zeros(2, 0, dtype=torch.long)).
+
+    threshold: θ value used during precomputation.
+    split_name: one of "train", "val", "test".
+
+    Raises FileNotFoundError if the parquet does not exist.
+    Run precompute_corr_graphs() first.
+    Shape assertion: each edge_index has shape[0] == 2.
+    """
+    tstr = _threshold_str(threshold)
+    path = os.path.join(config.CORR_EDGES_DIR,
+                        f"corr_edges_{split_name}_{tstr}.parquet")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Precomputed graphs not found: {path}\n"
+            "Run precompute_corr_graphs() first."
+        )
+
+    df = pd.read_parquet(path)
+    graphs: dict[pd.Timestamp, torch.LongTensor] = {}
+
+    for week_str, group in df.groupby("week", sort=True):
+        src = torch.tensor(group["src"].values.astype(np.int64), dtype=torch.long)
+        dst = torch.tensor(group["dst"].values.astype(np.int64), dtype=torch.long)
+        edge_index = torch.stack([src, dst])
+        assert edge_index.shape[0] == 2, \
+            f"edge_index row dim should be 2, got {edge_index.shape[0]}"
+        graphs[pd.Timestamp(week_str)] = edge_index
+
+    return graphs
+
+
 # ── Sector graph ──────────────────────────────────────────────────────────────
 
 def build_sector_graph(tickers: list[str],

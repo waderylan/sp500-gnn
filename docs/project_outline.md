@@ -249,7 +249,7 @@ The project uses a hybrid notebook + module structure. Notebooks serve as orches
 | config.py | Single source of truth for all hyperparameters, thresholds, file paths, and constants. Changing one number here propagates everywhere. Includes: RANDOM_SEED, WINSORIZE_CLIP, MAX_WEIGHT, CORR_THRESHOLD, all date boundaries. |
 | src/data.py | Price download, log return computation, weekly RV computation, train/val/test splitting. |
 | src/features.py | All feature engineering: volatility windows, return features, volume features, winsorization, cross-sectional z-scoring. |
-| src/graphs.py | Three graph constructors: build_correlation_graph(), build_sector_graph(), build_granger_graph(). Each returns a PyG-compatible edge index. Includes make_pyg_data() helper. |
+| src/graphs.py | Three graph constructors: build_correlation_graph(), build_sector_graph(), build_granger_graph(). Each returns a PyG-compatible edge index. Includes make_pyg_data() helper. Also provides precompute_corr_graphs() and load_corr_graphs() for disk-cached correlation graphs — see Precomputed Correlation Graphs section below. |
 | src/models.py | HAR model (sklearn, per-stock and pooled), LSTM model (PyTorch), GNN model (PyTorch Geometric GraphSAGE). All model class definitions. |
 | src/train.py | Training loops for LSTM and GNN. Handles chronological iteration, early stopping, checkpoint saving, and validation logging. |
 | src/evaluate.py | MSE, MAE, R-squared computation. Sector-level breakdown. Results table generation. |
@@ -266,6 +266,7 @@ The project uses a hybrid notebook + module structure. Notebooks serve as orches
 | data/raw/ | Downloaded price parquets. Never modified after creation. |
 | data/features/ | Computed feature tensors. Regenerated if features.py changes. |
 | data/graphs/ | Granger causality p-value matrix. Sector edge list. Sample correlation edge lists. |
+| data/graphs/corr_edges/ | Precomputed correlation edge graphs. Nine parquet files (3 thresholds × 3 splits). Written once; loaded as dict lookups during training. See Precomputed Correlation Graphs section. |
 | data/results/ | Model checkpoints, predictions, metrics JSON, figures. |
 
 ## Design Principles
@@ -275,6 +276,117 @@ The project uses a hybrid notebook + module structure. Notebooks serve as orches
 - config.py is the only place hyperparameters live. No magic numbers in src/ modules.
 - Parquet over CSV. All data artifacts are saved as parquet files. Faster to read, smaller on disk, preserves dtypes.
 - Fail loudly. Every data loading function asserts expected shapes. Every feature function verifies post-normalization statistics. Silent shape mismatches are the leading cause of subtle bugs in ML pipelines.
+
+## Precomputed Correlation Graphs
+
+### Problem
+
+The correlation graph is deterministic for any given (week, threshold) pair: the same log returns, the same date, and the same threshold always produce the same edge index. In the naive training loop, `build_correlation_graph()` was called at every training step — once per week per epoch. At 465 stocks, each call runs `pandas.DataFrame.corr()` over a 252 × 465 window, producing a 465 × 465 matrix. Across three ablation thresholds, 150 epochs, and ~470 combined train and validation weeks, this amounts to roughly 210,000 matrix computations before training completes. On a 465-stock universe, each `.corr()` call takes ~200–400ms, making graph construction the dominant training bottleneck by a wide margin.
+
+### Solution
+
+Correlation edge graphs are precomputed once before training begins and saved to disk as parquet files. The training loop replaces the `build_correlation_graph()` lambda with a dictionary lookup.
+
+### New Functions in `src/graphs.py`
+
+**`precompute_corr_graphs(log_returns, splits, lookback, thresholds)`**
+
+Iterates over all three splits (`train`, `val`, `test`) and all threshold values in `config.CORR_ABLATION_THRESHOLDS`. For each (split, threshold) pair, it calls `build_correlation_graph()` once per week — passing Friday of week T (`week + pd.Timedelta(days=4)`) as the date, consistent with the 1-step-ahead lookahead-free design — and appends the resulting edges to a DataFrame. The complete DataFrame for each (split, threshold) pair is written to a parquet file in `data/graphs/corr_edges/`. Files that already exist are skipped without recomputing. Re-running the cell is always safe and instant after the first run.
+
+Lookahead safety is preserved: the function passes `friday = week + pd.Timedelta(days=4)` to `build_correlation_graph()`, which sets the rolling window end at Friday of week T. The prediction target is week T+1's RV, which begins Monday_{T+1}. Friday_T < Monday_{T+1}.
+
+**`load_corr_graphs(threshold, split_name)`**
+
+Reads one parquet file and reconstructs a `dict[pd.Timestamp, torch.LongTensor]` mapping each week's Monday timestamp to its edge index. Keys are `pd.Timestamp` objects parsed from ISO date strings stored in the parquet. Weeks with zero edges above the threshold have no rows in the parquet and are absent from the dict; callers use `.get(week, torch.zeros(2, 0, dtype=torch.long))` as the fallback.
+
+Raises `FileNotFoundError` with a clear message if the file does not exist, so the error surface points directly to the fix (run `precompute_corr_graphs`).
+
+**`_threshold_str(t)`** (private helper)
+
+Converts a threshold float to a filename-safe string: `0.3 → "t0p3"`, `0.5 → "t0p5"`, `0.7 → "t0p7"`. Called in both `precompute_corr_graphs` and `load_corr_graphs` to ensure the filename encoding is consistent.
+
+### New Config Constant
+
+```python
+CORR_EDGES_DIR = str(_ROOT / "data/graphs/corr_edges")
+```
+
+All nine output file paths are derived from `CORR_EDGES_DIR` using `_threshold_str()`. No hardcoded paths anywhere in src/.
+
+### Output Files
+
+Nine parquet files written to `data/graphs/corr_edges/`:
+
+```
+corr_edges_train_t0p3.parquet    corr_edges_val_t0p3.parquet    corr_edges_test_t0p3.parquet
+corr_edges_train_t0p5.parquet    corr_edges_val_t0p5.parquet    corr_edges_test_t0p5.parquet
+corr_edges_train_t0p7.parquet    corr_edges_val_t0p7.parquet    corr_edges_test_t0p7.parquet
+```
+
+Each file schema: `week` (str, ISO date of the Monday), `src` (int32 node index), `dst` (int32 node index). One row per directed edge. Both directions are stored (A→B and B→A), consistent with the undirected convention used throughout the correlation graph pipeline. Weeks with no edges above the threshold have no rows.
+
+Approximate disk footprint: 20–40 MB per file at θ=0.3 (dense regime), 5–15 MB at θ=0.7 (sparse regime). Total across all nine files: under 300 MB on Drive.
+
+### Changes to Existing Code
+
+**`src/train.py` — `train_gnn_corr_ablation()`**
+
+The `log_returns: pd.DataFrame` parameter is replaced with `corr_graphs: dict[float, dict[pd.Timestamp, torch.LongTensor]]`. Inside the ablation loop, the `build_correlation_graph()` lambda is replaced with:
+
+```python
+graphs = corr_graphs[theta]
+edge_fn = lambda week, g=graphs: g.get(week, torch.zeros(2, 0, dtype=torch.long))
+```
+
+The `from src.graphs import build_correlation_graph` import is removed from `train.py` — nothing else in that module required it.
+
+**`src/evaluate.py` — `compile_validation_summary()`**
+
+The `log_returns: pd.DataFrame` parameter is removed. The function reads `best_threshold` from the saved ablation JSON as before, then calls `load_corr_graphs(best_theta, "val")` internally. The correlation graph lambda for `predict_gnn_val()` becomes a dict lookup over the loaded val graphs.
+
+**`notebooks/04_gnn_models.ipynb`**
+
+A dedicated precompute cell is inserted immediately after the data loading cell (the one that loads `log_returns`, `sector_history`, and `granger_edge_index`):
+
+```python
+# First run: ~90 seconds. Subsequent runs: instant (files already exist).
+precompute_corr_graphs(log_returns=log_returns, splits=splits)
+```
+
+The ablation cell merges train and val dicts before calling `train_gnn_corr_ablation`, since the training loop accesses both:
+
+```python
+corr_graphs = {
+    th: {**load_corr_graphs(th, "train"), **load_corr_graphs(th, "val")}
+    for th in config.CORR_ABLATION_THRESHOLDS
+}
+```
+
+The validation summary cell removes `log_returns=log_returns` from the `compile_validation_summary()` call.
+
+### Why All Three Splits Are Precomputed Upfront
+
+Test-split graphs are written during the same precompute pass even though they are not used until Phase 5. The reasons:
+
+1. `05_evaluate.ipynb` needs test-split correlation graphs when running GNN-Correlation inference. Precomputing them now avoids a separate setup step in a later session on a potentially cold Colab instance.
+2. The full pass takes approximately the same time whether it covers 2 or 3 splits. Deferring the test split saves no meaningful wall time.
+3. Precomputing everything in one place keeps the dependency graph simple: any notebook that needs correlation graphs calls `load_corr_graphs()` and gets what it needs without needing `log_returns` in scope.
+
+### Performance Impact
+
+| Metric | Before | After |
+|---|---|---|
+| `.corr()` calls per training run (3 thresholds) | ~210,000 | ~1,400 (one-time precompute) |
+| Precompute wall time (first run, full universe) | — | ~90 seconds |
+| Correlation work per subsequent training run | Hours | Under 1 second (file load) |
+| Dict lookup overhead per training step | — | Negligible |
+| Additional Drive storage | 0 | ~100–300 MB across 9 files |
+
+The 90-second precompute amortizes to effectively zero cost across any run after the first. On an A100 with 465 stocks, the correlation bottleneck was the reason the first ablation training run was interrupted after epoch 12 — each epoch was taking longer than it needed to, and the GPU was idle waiting on CPU-bound `.corr()` calls. After precomputation, GPU utilization during training should improve substantially.
+
+### Persistence on Google Colab
+
+The nine files are written to `config.CORR_EDGES_DIR`, which resolves within the Google Drive-mounted project root. Files survive Colab session restarts. On subsequent runs the precompute cell detects existing files and returns in under 1 second, printing one "already exists, skipping" line per file.
 
 ---
 

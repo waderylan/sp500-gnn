@@ -108,7 +108,6 @@ def compile_validation_summary(
     week_index: pd.DatetimeIndex,
     splits: pd.DataFrame,
     tickers: list[str],
-    log_returns: pd.DataFrame,
     sector_graphs: "dict[int, torch.LongTensor]",
     granger_edge_index: "torch.LongTensor",
     device: "torch.device",
@@ -121,12 +120,15 @@ def compile_validation_summary(
     Runs GNN inference in-memory for Correlation, Sector, and Granger variants by
     loading each best checkpoint and calling predict_gnn_val().
 
+    GNN-Correlation val graphs are loaded from disk via load_corr_graphs() using
+    the best threshold from corr_threshold_ablation.json.
+    Run precompute_corr_graphs() before calling this function.
+
     features:           shape (num_weeks, num_stocks, num_features)
     target:             shape (num_weeks, num_stocks)
     week_index:         DatetimeIndex aligned to features/target rows
     splits:             DataFrame with columns ['week', 'split']
     tickers:            ordered ticker list, length num_stocks
-    log_returns:        daily log returns for correlation graph construction
     sector_graphs:      {year: edge_index LongTensor} from build_all_sector_graphs()
     granger_edge_index: static directed LongTensor, shape (2, num_edges)
     device:             torch.device for GNN inference
@@ -144,7 +146,7 @@ def compile_validation_summary(
     import torch
     from src.models import GNNModel
     from src.train import predict_gnn_val
-    from src.graphs import build_correlation_graph
+    from src.graphs import load_corr_graphs
 
     results_dir = Path(config.DATA_RESULTS_DIR)
     ckpt_dir    = Path(config.CHECKPOINTS_DIR)
@@ -164,7 +166,8 @@ def compile_validation_summary(
     ablation   = json.load(open(results_dir / "corr_threshold_ablation.json"))
     best_theta = ablation["best_threshold"]
 
-    # GNN-Correlation
+    # GNN-Correlation — load precomputed val graphs (no recomputation)
+    val_corr_graphs = load_corr_graphs(best_theta, "val")
     corr_model = GNNModel(in_channels=n_feats).to(device)
     corr_model.load_state_dict(
         torch.load(ckpt_dir / "gnn_corr_best.pt", map_location=device, weights_only=True)
@@ -174,8 +177,8 @@ def compile_validation_summary(
         features=features,
         target=target,
         week_index=week_index,
-        edge_index_fn=lambda week: build_correlation_graph(
-            log_returns, week + pd.Timedelta(days=4), config.CORR_LOOKBACK_DAYS, best_theta
+        edge_index_fn=lambda week, g=val_corr_graphs: g.get(
+            week, torch.zeros(2, 0, dtype=torch.long)
         ),
         splits=splits,
         tickers=tickers,
