@@ -147,7 +147,7 @@ def compile_validation_summary(
     Lookahead safety: inference uses only features and edge indices for val weeks.
     """
     import torch
-    from src.models import GNNModel
+    from src.models import GNNModel, GNNModelV2
     from src.train import predict_gnn_val
     from src.graphs import load_corr_graphs
 
@@ -169,12 +169,27 @@ def compile_validation_summary(
     ablation   = json.load(open(results_dir / "corr_threshold_ablation.json"))
     best_theta = ablation["best_threshold"]
 
-    # GNN-Correlation — load precomputed val graphs (no recomputation)
+    # GNN-Correlation — use hparam-tuned model if available, else fall back to default.
     val_corr_graphs = load_corr_graphs(best_theta, "val")
-    corr_model = GNNModel(in_channels=n_feats).to(device)
-    corr_model.load_state_dict(
-        torch.load(ckpt_dir / "gnn_corr_best.pt", map_location=device, weights_only=True)
-    )
+    hparam_ckpt  = ckpt_dir / "gnn_corr_hparam_best.pt"
+    hparam_json  = results_dir / "gnn_hparam_search_results.json"
+    if hparam_ckpt.exists() and hparam_json.exists():
+        hparam_cfg = json.load(open(hparam_json))["best_config"]
+        corr_model = GNNModelV2(
+            in_channels=n_feats,
+            hidden_dim=int(hparam_cfg["hidden_dim"]),
+            dropout=float(hparam_cfg["dropout"]),
+            num_layers=int(hparam_cfg["num_layers"]),
+            batch_norm=bool(hparam_cfg["batch_norm"]),
+        ).to(device)
+        corr_model.load_state_dict(
+            torch.load(hparam_ckpt, map_location=device, weights_only=True)
+        )
+    else:
+        corr_model = GNNModel(in_channels=n_feats).to(device)
+        corr_model.load_state_dict(
+            torch.load(ckpt_dir / "gnn_corr_best.pt", map_location=device, weights_only=True)
+        )
     corr_preds = predict_gnn_val(
         model=corr_model,
         features=features,
@@ -235,8 +250,9 @@ def compile_validation_summary(
 
     assert len(all_results) == 6, f"Expected 6 model entries, got {len(all_results)}"
 
-    # Verify all four neural-model checkpoints load cleanly
-    for ckpt_name in ("lstm_best.pt", "gnn_corr_best.pt", "gnn_sector_best.pt", "gnn_granger_best.pt"):
+    # Verify all neural-model checkpoints load cleanly
+    corr_ckpt_name = "gnn_corr_hparam_best.pt" if hparam_ckpt.exists() else "gnn_corr_best.pt"
+    for ckpt_name in ("lstm_best.pt", corr_ckpt_name, "gnn_sector_best.pt", "gnn_granger_best.pt"):
         path = ckpt_dir / ckpt_name
         assert path.exists(), f"Checkpoint missing: {path}"
         torch.load(path, map_location="cpu", weights_only=True)

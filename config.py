@@ -46,11 +46,13 @@ GRANGER_MIN_EDGES  = 500            # fall back to BH if Bonferroni yields fewer
 
 # GNN architecture
 SAGE_FLOW  = "source_to_target"     # SAGEConv flow direction; critical for Granger directionality
-HIDDEN_DIM = 64
-DROPOUT    = 0.3
+HIDDEN_DIM     = 128   # updated from 64 after hparam search (04b_gnn_hparam_search.ipynb)
+GNN_NUM_LAYERS = 3     # updated from 2 after hparam search
+DROPOUT        = 0.3
 
 # Training
-LEARNING_RATE           = 0.001
+LEARNING_RATE     = 0.001   # used by LSTM
+GNN_LEARNING_RATE = 3e-4    # used by GNN; updated after hparam search
 EARLY_STOP_PATIENCE     = 10        # epochs without val improvement before stopping
 CHECKPOINT_EVERY_N_EPOCHS = 5
 
@@ -58,6 +60,15 @@ CHECKPOINT_EVERY_N_EPOCHS = 5
 LSTM_SEQ_LEN    = 4   # weeks of feature history per input sequence
 LSTM_MAX_EPOCHS = 150  # upper bound; early stopping triggers first
 GNN_MAX_EPOCHS  = 150  # upper bound; early stopping triggers first
+
+# GNN hyperparameter grid search
+# Fixed at CORR_THRESHOLD=0.3 (ablation winner). 48 configs total.
+GNN_HPARAM_LR         = [3e-4, 1e-3, 3e-3]
+GNN_HPARAM_HIDDEN     = [64, 128]
+GNN_HPARAM_DROPOUT    = [0.1, 0.3]
+GNN_HPARAM_BATCH_NORM = [True, False]
+GNN_HPARAM_NUM_LAYERS = [2, 3]
+GNN_HPARAM_PATIENCE   = 7  # reduced from EARLY_STOP_PATIENCE for faster search
 
 # Paths — absolute, anchored to the directory containing this file
 from pathlib import Path as _Path

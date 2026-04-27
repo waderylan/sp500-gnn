@@ -296,3 +296,64 @@ class GNNModel(nn.Module):
         assert pred.shape == (num_nodes,), f"Expected ({num_nodes},), got {pred.shape}"
         assert not torch.isnan(pred).any(), "NaN in GNN output"
         return pred
+
+
+class GNNModelV2(nn.Module):
+    """
+    Flexible GraphSAGE model for hyperparameter search.
+
+    Extends GNNModel with configurable depth and optional BatchNorm1d.
+    Forward interface is identical to GNNModel: forward(x, edge_index) → (num_stocks,).
+
+    in_channels: number of input features per node
+    hidden_dim:  hidden layer width for all SAGEConv layers
+    dropout:     dropout probability applied after each conv layer
+    num_layers:  number of SAGEConv layers (2 or 3)
+    batch_norm:  if True, BatchNorm1d is applied after each conv, before activation
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_dim: int = config.HIDDEN_DIM,
+        dropout: float = config.DROPOUT,
+        num_layers: int = 2,
+        batch_norm: bool = False,
+    ) -> None:
+        super().__init__()
+        self.convs: nn.ModuleList = nn.ModuleList()
+        self.bns: nn.ModuleList | None = nn.ModuleList() if batch_norm else None
+
+        for i in range(num_layers):
+            in_ch = in_channels if i == 0 else hidden_dim
+            self.convs.append(SAGEConv(in_ch, hidden_dim, flow=config.SAGE_FLOW))
+            if batch_norm:
+                self.bns.append(nn.BatchNorm1d(hidden_dim))  # type: ignore[union-attr]
+
+        self.dropout = nn.Dropout(p=dropout)
+        self.fc = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x: torch.Tensor, edge_index: torch.LongTensor) -> torch.Tensor:
+        """
+        x: shape (num_stocks, in_channels)
+        edge_index: shape (2, num_edges)
+        Returns: shape (num_stocks,)
+        """
+        num_nodes = x.shape[0]
+        if torch.isnan(x).any():
+            warnings.warn(
+                "GNNModelV2.forward: input features contain NaN values. "
+                "Imputing with 0 (z-score mean). Expected during warm-up weeks."
+            )
+            x = torch.nan_to_num(x, nan=0.0)
+
+        for i, conv in enumerate(self.convs):
+            x = conv(x, edge_index)
+            if self.bns is not None:
+                x = self.bns[i](x)
+            x = self.dropout(torch.relu(x))
+
+        pred = self.fc(x).squeeze(-1)
+        assert pred.shape == (num_nodes,), f"Expected ({num_nodes},), got {pred.shape}"
+        assert not torch.isnan(pred).any(), "NaN in GNNModelV2 output"
+        return pred

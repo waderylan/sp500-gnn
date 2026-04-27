@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 
 import config
-from src.models import LSTMModel, GNNModel
+from src.models import LSTMModel, GNNModel, GNNModelV2
 
 
 def set_seeds() -> None:
@@ -173,7 +173,7 @@ def train_lstm(
 
 
 def train_gnn(
-    model: GNNModel,
+    model: nn.Module,
     features: np.ndarray,
     target: np.ndarray,
     week_index: pd.DatetimeIndex,
@@ -182,7 +182,10 @@ def train_gnn(
     graph_type: str,
     device: torch.device,
     max_epochs: int = 150,
-) -> tuple[GNNModel, list[float]]:
+    lr: float = config.LEARNING_RATE,
+    patience: int = config.EARLY_STOP_PATIENCE,
+    save_periodic: bool = True,
+) -> tuple[nn.Module, list[float]]:
     """
     Train a GNN model with early stopping and checkpointing.
 
@@ -197,13 +200,16 @@ def train_gnn(
     week_index:    DatetimeIndex of length num_weeks aligned to features/target rows.
     edge_index_fn: Callable mapping a pd.Timestamp to a LongTensor edge_index.
     splits:        DataFrame with columns ['week', 'split'].
-    graph_type:    One of "correlation", "sector", "granger" — used in checkpoint names.
+    graph_type:    Used in checkpoint and loss-file names (e.g. "correlation", "hparam_007").
     device:        torch.device for computation.
     max_epochs:    Hard upper bound on training epochs.
+    lr:            Adam learning rate (default: config.LEARNING_RATE).
+    patience:      Early stopping patience in epochs (default: config.EARLY_STOP_PATIENCE).
+    save_periodic: If False, skip epoch-interval checkpoints (useful for grid search).
 
     Returns: (best model loaded from checkpoint, val_loss_history per epoch)
 
-    Checkpoints: config.CHECKPOINTS_DIR / f"gnn_{graph_type}_epoch{{n}}.pt"
+    Checkpoints: config.CHECKPOINTS_DIR / f"gnn_{graph_type}_epoch{{n}}.pt"  (if save_periodic)
     Best:        config.CHECKPOINTS_DIR / f"gnn_{graph_type}_best.pt"
     Val loss:    config.DATA_RESULTS_DIR / f"gnn_{graph_type}_val_loss.json"
     """
@@ -223,7 +229,7 @@ def train_gnn(
     train_steps = _valid_positions(train_weeks)
     val_steps   = _valid_positions(val_weeks)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, patience=5, factor=0.5, verbose=False
     )
@@ -282,7 +288,7 @@ def train_gnn(
 
         print(f"Epoch {epoch + 1:3d}  train={avg_train:.6f}  val={avg_val:.6f}")
 
-        if (epoch + 1) % config.CHECKPOINT_EVERY_N_EPOCHS == 0:
+        if save_periodic and (epoch + 1) % config.CHECKPOINT_EVERY_N_EPOCHS == 0:
             torch.save(model.state_dict(),
                        ckpt_dir / f"gnn_{graph_type}_epoch{epoch + 1}.pt")
 
@@ -293,9 +299,9 @@ def train_gnn(
         else:
             patience_counter += 1
 
-        if patience_counter >= config.EARLY_STOP_PATIENCE:
+        if patience_counter >= patience:
             print(f"Early stop at epoch {epoch + 1} "
-                  f"(no improvement for {config.EARLY_STOP_PATIENCE} epochs)")
+                  f"(no improvement for {patience} epochs)")
             break
 
     results_dir = Path(config.DATA_RESULTS_DIR)
@@ -583,3 +589,176 @@ def predict_gnn_val(
     assert len(result) > 0, "No valid val weeks found in splits"
 
     return result
+
+
+def run_gnn_hparam_search(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    corr_graphs: dict,
+    splits: pd.DataFrame,
+    device: torch.device,
+    grid: list[dict] | None = None,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Grid search over GNN-Correlation hyperparameters using GNNModelV2.
+
+    Fixed at CORR_THRESHOLD=0.3 (ablation winner). For each config in the grid,
+    seeds are reset, a fresh GNNModelV2 is initialized, and train_gnn is called
+    with save_periodic=False to avoid filling disk with intermediate checkpoints.
+
+    Supports resume: if a config's best checkpoint already exists and its val loss
+    was saved to the results JSON, that run is skipped.
+
+    features:    shape (num_weeks, num_stocks, num_features)
+    target:      shape (num_weeks, num_stocks)
+    week_index:  DatetimeIndex aligned to features/target rows
+    corr_graphs: {week_timestamp: edge_index} for θ=CORR_THRESHOLD, covering train+val weeks
+    splits:      DataFrame with columns ['week', 'split']
+    device:      torch.device for computation
+    grid:        list of config dicts with keys: lr, hidden_dim, dropout, batch_norm, num_layers.
+                 If None, builds the full grid from config.GNN_HPARAM_* constants.
+    max_epochs:  hard epoch ceiling per run
+
+    Returns: (results_df sorted by val_mse ascending, best_config dict)
+
+    Checkpoints: CHECKPOINTS_DIR/gnn_hparam_{i:03d}_best.pt per config
+    Best:        CHECKPOINTS_DIR/gnn_corr_hparam_best.pt
+    Results:     DATA_RESULTS_DIR/gnn_hparam_search_results.json
+    """
+    if grid is None:
+        grid = [
+            {
+                "lr": lr,
+                "hidden_dim": hd,
+                "dropout": do,
+                "batch_norm": bn,
+                "num_layers": nl,
+            }
+            for lr in config.GNN_HPARAM_LR
+            for hd in config.GNN_HPARAM_HIDDEN
+            for do in config.GNN_HPARAM_DROPOUT
+            for bn in config.GNN_HPARAM_BATCH_NORM
+            for nl in config.GNN_HPARAM_NUM_LAYERS
+        ]
+
+    in_channels = features.shape[2]
+    ckpt_dir    = Path(config.CHECKPOINTS_DIR)
+    results_dir = Path(config.DATA_RESULTS_DIR)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    results_path = results_dir / "gnn_hparam_search_results.json"
+
+    # Load any previously completed runs so we can resume a partial search.
+    completed: dict[int, float] = {}
+    if results_path.exists():
+        with open(results_path) as fh:
+            saved = json.load(fh)
+        for entry in saved.get("runs", []):
+            completed[entry["config_idx"]] = entry["val_mse"]
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week, g=corr_graphs: g.get(week, torch.zeros(2, 0, dtype=torch.long))
+    )
+
+    run_records: list[dict] = []
+
+    for i, cfg in enumerate(grid):
+        graph_tag = f"hparam_{i:03d}"
+        ckpt_path = ckpt_dir / f"gnn_{graph_tag}_best.pt"
+
+        print(f"\n{'=' * 64}")
+        print(f"Config {i + 1}/{len(grid)}  [{graph_tag}]")
+        print(f"  lr={cfg['lr']}  hidden={cfg['hidden_dim']}  dropout={cfg['dropout']}"
+              f"  batch_norm={cfg['batch_norm']}  num_layers={cfg['num_layers']}")
+
+        if i in completed and ckpt_path.exists():
+            val_mse = completed[i]
+            print(f"  Already done — val MSE={val_mse:.6f}  (skipping)")
+            record = {**cfg, "config_idx": i, "val_mse": val_mse,
+                      "checkpoint": str(ckpt_path)}
+            run_records.append(record)
+            continue
+
+        set_seeds()
+        model = GNNModelV2(
+            in_channels=in_channels,
+            hidden_dim=cfg["hidden_dim"],
+            dropout=cfg["dropout"],
+            num_layers=cfg["num_layers"],
+            batch_norm=cfg["batch_norm"],
+        ).to(device)
+
+        n_params = sum(p.numel() for p in model.parameters())
+        print(f"  Parameters: {n_params:,}")
+
+        train_gnn(
+            model=model,
+            features=features,
+            target=target,
+            week_index=week_index,
+            edge_index_fn=edge_fn,
+            splits=splits,
+            graph_type=graph_tag,
+            device=device,
+            max_epochs=max_epochs,
+            lr=cfg["lr"],
+            patience=config.GNN_HPARAM_PATIENCE,
+            save_periodic=False,
+        )
+
+        loss_path = results_dir / f"gnn_{graph_tag}_val_loss.json"
+        with open(loss_path) as fh:
+            loss_data = json.load(fh)
+        val_mse = loss_data["best_val_loss"]
+        print(f"  Best val MSE={val_mse:.6f}")
+
+        record = {**cfg, "config_idx": i, "val_mse": val_mse, "checkpoint": str(ckpt_path)}
+        run_records.append(record)
+
+        # Persist after every completed run so a crash loses at most one config.
+        with open(results_path, "w") as fh:
+            json.dump({"runs": run_records}, fh, indent=2)
+
+    assert len(run_records) == len(grid), (
+        f"Expected {len(grid)} results, got {len(run_records)}"
+    )
+
+    results_df = pd.DataFrame(run_records).sort_values("val_mse").reset_index(drop=True)
+
+    best_row = results_df.iloc[0]
+
+    # Cast explicitly to Python native types — pandas pulls numpy types from DataFrame rows
+    # which are not JSON serializable.
+    _type: dict[str, type] = {
+        "lr": float, "hidden_dim": int, "dropout": float,
+        "batch_norm": bool, "num_layers": int,
+    }
+    best_config = {k: _type[k](best_row[k]) for k in _type}
+
+    best_src = ckpt_dir / f"gnn_hparam_{int(best_row['config_idx']):03d}_best.pt"
+    best_dst = ckpt_dir / "gnn_corr_hparam_best.pt"
+    shutil.copy2(best_src, best_dst)
+
+    # Save final sorted results.
+    with open(results_path, "w") as fh:
+        json.dump(
+            {
+                "runs": run_records,
+                "best_config": best_config,
+                "best_val_mse": float(best_row["val_mse"]),
+                "baseline_val_mse": None,
+            },
+            fh,
+            indent=2,
+        )
+
+    print(f"\n{'=' * 64}")
+    print(f"Search complete. {len(grid)} configs evaluated.")
+    print(f"Best val MSE : {best_row['val_mse']:.6f}")
+    print(f"Best config  : {best_config}")
+    print(f"Checkpoint   : {best_dst}")
+
+    return results_df, best_config
