@@ -14,6 +14,7 @@ import warnings
 import torch
 import torch.nn as nn
 from torch_geometric.nn import SAGEConv
+from torch_geometric.nn.norm import GraphNorm
 from sklearn.linear_model import LinearRegression
 
 import config
@@ -302,14 +303,19 @@ class GNNModelV2(nn.Module):
     """
     Flexible GraphSAGE model for hyperparameter search.
 
-    Extends GNNModel with configurable depth and optional BatchNorm1d.
+    Extends GNNModel with configurable depth and optional GraphNorm.
     Forward interface is identical to GNNModel: forward(x, edge_index) → (num_stocks,).
 
     in_channels: number of input features per node
     hidden_dim:  hidden layer width for all SAGEConv layers
     dropout:     dropout probability applied after each conv layer
     num_layers:  number of SAGEConv layers (2 or 3)
-    batch_norm:  if True, BatchNorm1d is applied after each conv, before activation
+    batch_norm:  if True, GraphNorm is applied after each conv, before activation.
+                 GraphNorm preserves cross-sectional variance between node embeddings
+                 (critical for ranking tasks) via a learnable mean_scale (alpha) per layer.
+                 BatchNorm1d was used previously but normalizes away cross-sectional
+                 variance, harming rank IC. GraphNorm replaces it with batch=None,
+                 treating all 465 stocks as one graph per time step.
     """
 
     def __init__(
@@ -328,7 +334,7 @@ class GNNModelV2(nn.Module):
             in_ch = in_channels if i == 0 else hidden_dim
             self.convs.append(SAGEConv(in_ch, hidden_dim, flow=config.SAGE_FLOW))
             if batch_norm:
-                self.bns.append(nn.BatchNorm1d(hidden_dim))  # type: ignore[union-attr]
+                self.bns.append(GraphNorm(hidden_dim))  # type: ignore[union-attr]
 
         self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(hidden_dim, 1)
@@ -350,7 +356,8 @@ class GNNModelV2(nn.Module):
         for i, conv in enumerate(self.convs):
             x = conv(x, edge_index)
             if self.bns is not None:
-                x = self.bns[i](x)
+                # batch=None: all nodes belong to one graph snapshot (465 stocks at week T)
+                x = self.bns[i](x, batch=None)
             x = self.dropout(torch.relu(x))
 
         pred = self.fc(x).squeeze(-1)

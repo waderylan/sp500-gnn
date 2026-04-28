@@ -1,5 +1,5 @@
 """
-Evaluation metrics: MSE, MAE, R², and sector-level breakdowns.
+Evaluation metrics: MSE, MAE, R², Rank IC, and sector-level breakdowns.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 import config
 
@@ -129,6 +130,81 @@ def compare_models(results: dict[str, dict[str, float]]) -> pd.DataFrame:
         f"Row count mismatch: {len(df)} vs {len(results)}"
     )
     return df
+
+
+def compute_rank_ic(
+    preds: pd.DataFrame,
+    actuals: pd.DataFrame,
+    min_valid: int = 10,
+) -> pd.Series:
+    """
+    Compute cross-sectional Spearman rank IC at each week.
+
+    preds:     DataFrame of shape (num_weeks, num_stocks), predicted RV at row T.
+    actuals:   DataFrame of same shape, actual (target) RV for week T+1 at row T.
+    min_valid: minimum number of non-NaN stock pairs needed to compute IC at a week.
+               Weeks with fewer valid pairs produce NaN.
+    Returns:   pd.Series indexed by week, values in [-1, 1], NaN for sparse weeks.
+
+    Shape assertion: preds.shape == actuals.shape.
+    Lookahead safety: both DataFrames are indexed by the prediction week T.
+                      actuals contains week T+1 RV stored at row T (target.parquet convention).
+                      This function performs no date windowing — it operates on pre-aligned arrays.
+    """
+    assert preds.shape == actuals.shape, (
+        f"Shape mismatch: preds {preds.shape} vs actuals {actuals.shape}"
+    )
+    shared_index = preds.index.intersection(actuals.index)
+    ic_values: list[float] = []
+
+    for week in shared_index:
+        p = preds.loc[week]
+        a = actuals.loc[week]
+        valid = p.notna() & a.notna()
+        if valid.sum() < min_valid:
+            ic_values.append(float("nan"))
+            continue
+        ic, _ = spearmanr(p[valid].values, a[valid].values)
+        ic_values.append(float(ic))
+
+    result = pd.Series(ic_values, index=shared_index, name="rank_ic")
+    assert len(result) == len(shared_index), (
+        f"IC series length {len(result)} does not match index length {len(shared_index)}"
+    )
+    return result
+
+
+def summarize_rank_ic(ic_series: pd.Series) -> dict[str, float]:
+    """
+    Compute summary statistics from a weekly Rank IC series.
+
+    ic_series: pd.Series of Spearman IC values (NaN weeks are dropped).
+    Returns dict with keys:
+        mean_ic:   mean IC across weeks.
+        ic_tstat:  t-statistic testing H0: mean IC = 0 (= mean / (std / sqrt(n))).
+        ic_ir:     information ratio (= mean / std).
+        n_weeks:   number of non-NaN weeks used.
+        pct_positive: fraction of IC values > 0.
+
+    Shape assertion: none (operates on a 1D series).
+    """
+    clean = ic_series.dropna()
+    n = len(clean)
+    if n == 0:
+        return {"mean_ic": float("nan"), "ic_tstat": float("nan"),
+                "ic_ir": float("nan"), "n_weeks": 0, "pct_positive": float("nan")}
+    mean_ic = float(clean.mean())
+    std_ic  = float(clean.std(ddof=1))
+    ic_tstat    = mean_ic / (std_ic / np.sqrt(n)) if std_ic > 0 else float("nan")
+    ic_ir       = mean_ic / std_ic if std_ic > 0 else float("nan")
+    pct_positive = float((clean > 0).mean())
+    return {
+        "mean_ic":     mean_ic,
+        "ic_tstat":    ic_tstat,
+        "ic_ir":       ic_ir,
+        "n_weeks":     n,
+        "pct_positive": pct_positive,
+    }
 
 
 def compile_validation_summary(

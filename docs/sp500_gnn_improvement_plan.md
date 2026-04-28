@@ -25,7 +25,7 @@ The following tasks must be completed in sequence:
 - [x] 1. Long-short portfolio construction  
 - [x] 2. Volatility-targeted portfolio  
 - [x] 3. Minimum variance portfolio  
-- [ ] 4. Rank IC evaluation metric  
+- [x] 4. Rank IC evaluation metric  
 - [ ] 5. GNN ensemble (prediction averaging)  
 - [ ] 6. (Optional, next phase) Rank-based training loss  
 

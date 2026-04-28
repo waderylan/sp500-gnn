@@ -65,12 +65,17 @@ LSTM_MAX_EPOCHS = 150  # upper bound; early stopping triggers first
 GNN_MAX_EPOCHS  = 150  # upper bound; early stopping triggers first
 
 # GNN hyperparameter grid search
-# Fixed at CORR_THRESHOLD=0.3 (ablation winner). 48 configs total.
-GNN_HPARAM_LR         = [3e-4, 1e-3, 3e-3]
-GNN_HPARAM_HIDDEN     = [64, 128]
+# Fixed at CORR_THRESHOLD=0.3 (ablation winner). 24 configs total.
+# Changes from round 1 (48 configs):
+#   - num_layers fixed at 3 (won all top-5 slots; 2-layer configs dropped)
+#   - hidden_dim shifted from [64, 128] to [128, 256] (64 never cracked top 5)
+#   - lr shifted from [3e-4, 1e-3, 3e-3] to [1e-4, 3e-4, 1e-3] (winner was at low end; 3e-3 dropped)
+#   - batch_norm kept [True, False]; True now means GraphNorm instead of BatchNorm1d
+GNN_HPARAM_LR         = [1e-4, 3e-4, 1e-3]
+GNN_HPARAM_HIDDEN     = [128, 256]
 GNN_HPARAM_DROPOUT    = [0.1, 0.3]
-GNN_HPARAM_BATCH_NORM = [True, False]
-GNN_HPARAM_NUM_LAYERS = [2, 3]
+GNN_HPARAM_BATCH_NORM = [True, False]  # True now means GraphNorm (was BatchNorm1d)
+GNN_HPARAM_NUM_LAYERS = [3]            # fixed; 2-layer configs lost in round 1
 GNN_HPARAM_PATIENCE   = 7  # reduced from EARLY_STOP_PATIENCE for faster search
 
 # Paths — absolute, anchored to the directory containing this file
