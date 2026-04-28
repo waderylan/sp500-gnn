@@ -43,7 +43,7 @@ Notebook writing rule for every applicable item: create or update notebooks so t
   Resolve the GNN hyperparameter/config mismatch, fix the LSTM hidden-dimension default, lock the current-constituent universe language, and standardize sector labels. These are small changes that prevent confusing or invalid comparisons later.
   Notebook output: no need to make any notebook changes.
 
-- [ ] **4. Implement statistical testing infrastructure**
+- [x] **4. Implement statistical testing infrastructure**
 
   Implement `src/significance.py`, generate per-week model error series, and add block-bootstrap Sharpe confidence intervals. This can run before or alongside diagnostics, but it must be complete before any final performance claims.
   Notebook output: write and display DM, bootstrap, and significance summary tables in `notebooks/07_significance.ipynb`. The notebook should show the main tables with sorted model comparisons, confidence intervals, and FDR-adjusted significance flags. Execute/save with `uv run jupyter nbconvert --to notebook --execute --inplace notebooks/07_significance.ipynb`; saved artifacts should be `data/results/dm_test_results.csv`, `data/results/bootstrap_sharpe_ci.csv`, and `data/results/significance_summary.csv`.
@@ -132,7 +132,7 @@ These tasks preserve the current state before making changes. This matters becau
 
 This is the highest-priority phase. Do not use new model results in a paper until this phase is complete.
 
-- [ ] **Implement statistical significance testing in `src/significance.py`**
+- [x] **Implement statistical significance testing in `src/significance.py`**
 
   Replace the current `NotImplementedError` stubs with working implementations:
 
@@ -149,7 +149,7 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
   Context: current MSE differences are small enough that point estimates alone are not publishable. The GNN ensemble beats LSTM by about `0.00041` MSE and HAR per-stock by about `0.00084` MSE. These improvements may or may not survive formal tests over 103 test weeks.
 
-- [ ] **Add per-week model error series**
+- [x] **Add per-week model error series**
 
   Produce one weekly error series per model:
 
@@ -163,7 +163,7 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
   Context: the DM test should operate on per-week loss differentials, not on one pooled scalar MSE. This preserves the time-series structure of forecast errors.
 
-- [ ] **Add Sharpe bootstrap inputs**
+- [x] **Add Sharpe bootstrap inputs**
 
   Ensure portfolio return files contain clean weekly net return series by model and strategy:
 
@@ -826,9 +826,9 @@ These tasks strengthen the project but are mostly **future work** for the first 
 
 If work starts now, the next ten concrete tasks should be:
 
-- [ ] Implement `src/significance.py`.
-- [ ] Generate weekly model error series.
-- [ ] Generate bootstrap Sharpe confidence intervals.
+- [x] Implement `src/significance.py`.
+- [x] Generate weekly model error series.
+- [x] Generate bootstrap Sharpe confidence intervals.
 - [x] Create the experiment registry.
 - [x] Resolve GNN hyperparameter/config mismatch.
 - [x] Fix LSTM hidden-dim default.
