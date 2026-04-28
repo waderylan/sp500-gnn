@@ -23,7 +23,7 @@ import config
 from src.significance import block_bootstrap_sharpe, run_all_dm_tests
 
 
-PREDICTION_FILES = {
+FALLBACK_PREDICTION_FILES = {
     "HAR per-stock": "test_preds_har.parquet",
     "HAR pooled": "test_preds_har_pooled.parquet",
     "LSTM": "test_preds_lstm.parquet",
@@ -36,9 +36,9 @@ PREDICTION_FILES = {
     "Rank-loss GNN-Granger": "test_preds_gnn_granger_rankloss.parquet",
 }
 
-BASELINE_MODELS = ["HAR per-stock", "HAR pooled", "LSTM"]
+DEFAULT_BASELINE_MODELS = ["HAR per-stock", "HAR pooled", "LSTM"]
 
-PORTFOLIO_RETURN_FILES = {
+KNOWN_PORTFOLIO_RETURN_FILES = {
     "long_only_inverse_vol": "portfolio_returns.parquet",
     "long_short": "portfolio_ls_returns.parquet",
     "volatility_targeted": "portfolio_vt_returns.parquet",
@@ -46,25 +46,71 @@ PORTFOLIO_RETURN_FILES = {
 }
 
 
-def _load_existing_predictions(results_dir: Path) -> dict[str, pd.DataFrame]:
-    """Load available prediction files without fabricating missing models."""
-    predictions: dict[str, pd.DataFrame] = {}
-    for model, filename in PREDICTION_FILES.items():
+def _repo_relative_path(path_text: str) -> Path:
+    """Resolve a registry artifact path relative to the repository root."""
+    path = Path(str(path_text))
+    if path.is_absolute():
+        return path
+    return ROOT / path
+
+
+def load_prediction_registry(results_dir: Path) -> pd.DataFrame:
+    """
+    Load registered prediction artifacts, falling back to the frozen roster map.
+
+    New models become eligible for significance tests when their registry row
+    includes a non-empty ``prediction_path`` pointing to an existing parquet.
+    """
+    registry_path = results_dir / "experiment_registry.csv"
+    if registry_path.exists():
+        registry = pd.read_csv(registry_path).fillna("")
+        required = {"experiment_id", "model_name", "prediction_path"}
+        missing = required - set(registry.columns)
+        if missing:
+            raise ValueError(f"Registry is missing columns: {sorted(missing)}")
+
+        rows: list[dict[str, object]] = []
+        for row in registry.to_dict("records"):
+            prediction_path = str(row.get("prediction_path", "")).strip()
+            if not prediction_path:
+                continue
+            resolved = _repo_relative_path(prediction_path)
+            if resolved.exists():
+                rows.append({**row, "resolved_prediction_path": resolved})
+        if rows:
+            return pd.DataFrame(rows)
+
+    fallback_rows = []
+    for model, filename in FALLBACK_PREDICTION_FILES.items():
         path = results_dir / filename
         if path.exists():
-            predictions[model] = pd.read_parquet(path)
-    if not predictions:
+            fallback_rows.append(
+                {
+                    "experiment_id": "",
+                    "model_name": model,
+                    "model_family": "",
+                    "graph_type": "",
+                    "loss_type": "",
+                    "feature_version": "",
+                    "graph_version": "",
+                    "prediction_path": str(path),
+                    "resolved_prediction_path": path,
+                }
+            )
+    if not fallback_rows:
         raise FileNotFoundError(f"No prediction files found in {results_dir}")
-    return predictions
+    return pd.DataFrame(fallback_rows)
 
 
 def build_weekly_model_errors(results_dir: Path, features_dir: Path) -> pd.DataFrame:
     """Compute weekly cross-sectional MSE for each saved prediction artifact."""
     target = pd.read_parquet(features_dir / "target.parquet")
-    predictions = _load_existing_predictions(results_dir)
+    registry = load_prediction_registry(results_dir)
     rows: list[dict[str, object]] = []
 
-    for model, preds in predictions.items():
+    for metadata in registry.to_dict("records"):
+        model = str(metadata["model_name"])
+        preds = pd.read_parquet(metadata["resolved_prediction_path"])
         common_weeks = preds.index.intersection(target.index)
         common_tickers = preds.columns.intersection(target.columns)
         if common_weeks.empty or common_tickers.empty:
@@ -81,6 +127,13 @@ def build_weekly_model_errors(results_dir: Path, features_dir: Path) -> pd.DataF
                 {
                     "week": week,
                     "model": model,
+                    "experiment_id": metadata.get("experiment_id", ""),
+                    "model_family": metadata.get("model_family", ""),
+                    "graph_type": metadata.get("graph_type", ""),
+                    "loss_type": metadata.get("loss_type", ""),
+                    "feature_version": metadata.get("feature_version", ""),
+                    "graph_version": metadata.get("graph_version", ""),
+                    "prediction_path": metadata.get("prediction_path", ""),
                     "weekly_mse": float(value),
                     "n_stocks": int(n_stocks.loc[week]),
                 }
@@ -89,22 +142,26 @@ def build_weekly_model_errors(results_dir: Path, features_dir: Path) -> pd.DataF
     return pd.DataFrame(rows).sort_values(["week", "model"]).reset_index(drop=True)
 
 
-def build_dm_results(weekly_errors: pd.DataFrame) -> pd.DataFrame:
+def build_dm_results(
+    weekly_errors: pd.DataFrame,
+    baseline_models: list[str] | None = None,
+) -> pd.DataFrame:
     """Run DM tests for available non-baseline models against core baselines."""
+    baseline_models = baseline_models or DEFAULT_BASELINE_MODELS
     pivot = weekly_errors.pivot(index="week", columns="model", values="weekly_mse").sort_index()
     baselines = {
         model: pivot[model].to_numpy(dtype=float)
-        for model in BASELINE_MODELS
+        for model in baseline_models
         if model in pivot.columns
     }
-    if len(baselines) != len(BASELINE_MODELS):
-        missing = sorted(set(BASELINE_MODELS) - set(baselines))
+    if len(baselines) != len(baseline_models):
+        missing = sorted(set(baseline_models) - set(baselines))
         raise FileNotFoundError(f"Missing baseline weekly error series: {missing}")
 
     comparison_models = {
         model: pivot[model].to_numpy(dtype=float)
         for model in pivot.columns
-        if model not in BASELINE_MODELS
+        if model not in baseline_models
     }
     return run_all_dm_tests(comparison_models, baselines)
 
@@ -128,10 +185,10 @@ def build_bootstrap_results(
     """Generate Sharpe and Sharpe-difference bootstrap intervals."""
     rows: list[dict[str, object]] = []
 
-    for strategy, filename in PORTFOLIO_RETURN_FILES.items():
-        path = results_dir / filename
-        if not path.exists():
-            continue
+    known_by_filename = {filename: strategy for strategy, filename in KNOWN_PORTFOLIO_RETURN_FILES.items()}
+    candidate_paths = sorted(results_dir.glob("portfolio*_returns.parquet"))
+    for path in candidate_paths:
+        strategy = known_by_filename.get(path.name, path.stem.removeprefix("portfolio_").removesuffix("_returns"))
         returns = _pivot_returns(pd.read_parquet(path))
 
         benchmark = "Equal-weight" if "Equal-weight" in returns.columns else None
@@ -147,6 +204,7 @@ def build_bootstrap_results(
             rows.append(
                 {
                     "strategy": strategy,
+                    "return_path": str(path),
                     "model": model,
                     "comparison": "sharpe",
                     "benchmark": "",
@@ -166,6 +224,7 @@ def build_bootstrap_results(
                 rows.append(
                     {
                         "strategy": strategy,
+                        "return_path": str(path),
                         "model": model,
                         "comparison": "sharpe_diff",
                         "benchmark": benchmark,
@@ -227,6 +286,7 @@ def generate_significance_artifacts(
     *,
     results_dir: Path,
     features_dir: Path,
+    baseline_models: list[str] | None = None,
     block_size: int = 8,
     n_bootstrap: int = 5000,
     seed: int = 42,
@@ -235,7 +295,7 @@ def generate_significance_artifacts(
     results_dir.mkdir(parents=True, exist_ok=True)
 
     weekly_errors = build_weekly_model_errors(results_dir, features_dir)
-    dm_results = build_dm_results(weekly_errors)
+    dm_results = build_dm_results(weekly_errors, baseline_models=baseline_models)
     bootstrap_results = build_bootstrap_results(
         results_dir,
         block_size=block_size,
@@ -259,6 +319,12 @@ def generate_significance_artifacts(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--baseline-model",
+        action="append",
+        dest="baseline_models",
+        help="Model name to use as a DM-test baseline. May be passed multiple times.",
+    )
     parser.add_argument("--block-size", type=int, default=8)
     parser.add_argument("--n-bootstrap", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=42)
@@ -270,6 +336,7 @@ def main() -> None:
     paths = generate_significance_artifacts(
         results_dir=Path(config.DATA_RESULTS_DIR),
         features_dir=Path(config.DATA_FEATURES_DIR),
+        baseline_models=args.baseline_models,
         block_size=args.block_size,
         n_bootstrap=args.n_bootstrap,
         seed=args.seed,

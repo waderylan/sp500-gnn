@@ -270,7 +270,7 @@ def _registry_specs(results_dir: Path) -> dict[str, dict[str, Any]]:
 
 
 def build_experiment_registry(results_dir: Path | None = None) -> pd.DataFrame:
-    """Build the current experiment registry as a DataFrame."""
+    """Build the current baseline experiment registry as a DataFrame."""
     results_dir = Path(results_dir or config.DATA_RESULTS_DIR)
     specs = _registry_specs(results_dir)
     rows = []
@@ -310,12 +310,97 @@ def build_experiment_registry(results_dir: Path | None = None) -> pd.DataFrame:
     return registry
 
 
-def write_experiment_registry(results_dir: Path | None = None) -> Path:
+def normalize_registry_schema(registry: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a registry with the canonical columns first and any future columns kept.
+
+    This lets downstream code depend on the current schema while allowing future
+    training steps to add extra audit columns without breaking old readers.
+    """
+    normalized = registry.copy()
+    for column in REGISTRY_COLUMNS:
+        if column not in normalized.columns:
+            normalized[column] = ""
+
+    extra_columns = [column for column in normalized.columns if column not in REGISTRY_COLUMNS]
+    ordered_columns = REGISTRY_COLUMNS + extra_columns
+    return normalized[ordered_columns].fillna("")
+
+
+def validate_experiment_registry(registry: pd.DataFrame) -> None:
+    """Validate fields that downstream artifact readers require."""
+    missing = [column for column in REGISTRY_COLUMNS if column not in registry.columns]
+    if missing:
+        raise ValueError(f"Experiment registry is missing columns: {missing}")
+
+    experiment_ids = registry["experiment_id"].astype(str).str.strip()
+    model_names = registry["model_name"].astype(str).str.strip()
+    if (experiment_ids == "").any():
+        raise ValueError("Experiment registry contains blank experiment_id values.")
+    if (model_names == "").any():
+        raise ValueError("Experiment registry contains blank model_name values.")
+    if experiment_ids.duplicated().any():
+        duplicates = sorted(experiment_ids[experiment_ids.duplicated()].unique())
+        raise ValueError(f"Duplicate experiment_id values: {duplicates}")
+
+    for column in [
+        "hyperparameters",
+        "test_metrics_path",
+        "portfolio_metrics_path",
+    ]:
+        for value in registry[column].astype(str):
+            value = value.strip()
+            if not value:
+                continue
+            try:
+                json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Column {column} contains invalid JSON: {value}") from exc
+
+
+def merge_with_existing_registry(
+    current_registry: pd.DataFrame,
+    existing_registry: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """
+    Preserve future experiment rows when refreshing current baseline rows.
+
+    Current baseline rows are authoritative for their experiment IDs. Rows with
+    other experiment IDs are kept unchanged, so future model-training steps can
+    append rows without being erased by a later registry refresh.
+    """
+    current = normalize_registry_schema(current_registry)
+    if existing_registry is None or existing_registry.empty:
+        merged = current
+    else:
+        existing = normalize_registry_schema(existing_registry)
+        current_ids = set(current["experiment_id"].astype(str))
+        future_rows = existing[~existing["experiment_id"].astype(str).isin(current_ids)]
+        all_columns = list(dict.fromkeys([*current.columns, *future_rows.columns]))
+        merged = pd.concat(
+            [
+                current.reindex(columns=all_columns, fill_value=""),
+                future_rows.reindex(columns=all_columns, fill_value=""),
+            ],
+            ignore_index=True,
+        )
+
+    validate_experiment_registry(merged)
+    return merged
+
+
+def write_experiment_registry(
+    results_dir: Path | None = None,
+    *,
+    preserve_existing: bool = True,
+) -> Path:
     """Write ``data/results/experiment_registry.csv`` and return its path."""
     results_dir = Path(results_dir or config.DATA_RESULTS_DIR)
     results_dir.mkdir(parents=True, exist_ok=True)
-    registry = build_experiment_registry(results_dir)
     path = results_dir / "experiment_registry.csv"
+    current_registry = build_experiment_registry(results_dir)
+    existing_registry = pd.read_csv(path) if preserve_existing and path.exists() else None
+    registry = merge_with_existing_registry(current_registry, existing_registry)
     registry.to_csv(path, index=False)
     return path
 
@@ -329,7 +414,51 @@ def load_experiment_registry(results_dir: Path | None = None) -> pd.DataFrame:
             f"Experiment registry not found at {path}. "
             "Run `uv run python -m src.experiment_registry` first."
         )
-    return pd.read_csv(path)
+    registry = normalize_registry_schema(pd.read_csv(path))
+    validate_experiment_registry(registry)
+    return registry
+
+
+def register_experiment(
+    row: dict[str, Any],
+    results_dir: Path | None = None,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """
+    Append or replace one future experiment row in the saved registry.
+
+    Training code can call this after writing checkpoints, predictions, and
+    metric artifacts. The row may include future extra columns; canonical
+    registry columns are still written first.
+    """
+    results_dir = Path(results_dir or config.DATA_RESULTS_DIR)
+    path = results_dir / "experiment_registry.csv"
+    registry = load_experiment_registry(results_dir) if path.exists() else build_experiment_registry(results_dir)
+    new_row = normalize_registry_schema(pd.DataFrame([row]))
+    experiment_id = str(new_row.loc[0, "experiment_id"]).strip()
+    if not experiment_id:
+        raise ValueError("New registry row must include experiment_id.")
+
+    exists = registry["experiment_id"].astype(str) == experiment_id
+    if exists.any() and not overwrite:
+        raise ValueError(
+            f"Experiment {experiment_id!r} already exists. "
+            "Pass overwrite=True to replace it."
+        )
+    registry = registry.loc[~exists].copy()
+    all_columns = list(dict.fromkeys([*registry.columns, *new_row.columns]))
+    registry = pd.concat(
+        [
+            registry.reindex(columns=all_columns, fill_value=""),
+            new_row.reindex(columns=all_columns, fill_value=""),
+        ],
+        ignore_index=True,
+    )
+    registry = normalize_registry_schema(registry)
+    validate_experiment_registry(registry)
+    registry.to_csv(path, index=False)
+    return path
 
 
 def main() -> None:
@@ -341,9 +470,17 @@ def main() -> None:
         default=None,
         help="Optional results directory. Defaults to config.DATA_RESULTS_DIR.",
     )
+    parser.add_argument(
+        "--no-preserve-existing",
+        action="store_true",
+        help="Drop rows whose experiment_id is not part of the current baseline roster.",
+    )
     args = parser.parse_args()
 
-    path = write_experiment_registry(args.results_dir)
+    path = write_experiment_registry(
+        args.results_dir,
+        preserve_existing=not args.no_preserve_existing,
+    )
     registry = load_experiment_registry(args.results_dir)
     print(f"Wrote experiment registry: {_relative(path)}")
     print(f"Rows: {len(registry)}")
