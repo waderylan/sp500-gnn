@@ -32,9 +32,10 @@ Notebook writing rule for every applicable item: create or update notebooks so t
   Snapshot the current metrics, prediction files, checkpoints, and model roster before changing features or retraining. This gives every later experiment a clean comparison point.
   Notebook output: add a short frozen-baseline summary section to `notebooks/05_evaluate.ipynb` for ML/ranking metrics and to `notebooks/06_portfolio.ipynb` for portfolio metrics. The visible notebook output should include the frozen metric tables, snapshot timestamp or manifest path, and model roster. Execute and save both notebooks with `uv run jupyter nbconvert --to notebook --execute --inplace notebooks/05_evaluate.ipynb` and the same command for `notebooks/06_portfolio.ipynb`; saved snapshot artifacts remain under `data/results/`.
 
-- [ ] **2. Create the experiment registry**
+- [x] **2. Create the experiment registry**
 
   Add a machine-readable registry before producing more results. Every current and future model should have a row with checkpoint path, feature version, graph version, loss type, hyperparameters, and metric artifact paths.
+  Registry behavior: the current registry is schema-forward-compatible but intentionally explicit. New trained models are not auto-discovered from checkpoint files; each training step that creates a new model must add registry rows for the new experiment IDs before the step is complete.
   Notebook output: display the registry in `notebooks/05_evaluate.ipynb` with enough columns visible to audit provenance, and add a small registry-reference cell to model-training notebooks after new runs. Execute/save the affected notebooks with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb` so the registry preview is visible; saved registry should be `data/results/experiment_registry.csv` or `data/results/experiment_registry.json`.
 
 - [ ] **3. Fix reproducibility inconsistencies**
@@ -173,7 +174,7 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
   Context: bootstrap Sharpe intervals require the actual weekly return series, not only summary tables. The block bootstrap should preserve serial dependence by resampling contiguous blocks.
 
-- [ ] **Create an experiment registry**
+- [x] **Create an experiment registry**
 
   Add a machine-readable registry, for example:
 
@@ -478,6 +479,8 @@ This is the first major feature improvement. It should be implemented after Phas
   - GNN-Granger with macro features.
   - GNN-Ensemble from the three macro-feature GNNs.
 
+  Registry requirement: add new rows for every macro-feature neural model and ensemble with explicit `feature_version`, `graph_version`, checkpoint paths, validation metrics, test prediction paths, and notes tying them to the macro feature artifact.
+
   Keep HAR baselines unchanged as pure HAR baselines unless adding a separate macro-HAR model.
 
   Context: if only the GNNs receive macro features, the comparison against LSTM becomes unfair. LSTM should get the same expanded node feature sequence.
@@ -537,6 +540,8 @@ Scope status: **current paper scope, high importance.** This phase corresponds t
 
   - `data/results/mixed_loss_alpha_sweep.csv`
 
+  Registry requirement: register each alpha-sweep run with its validation-only config, checkpoint path, validation metrics path, and prediction artifact path before comparing downstream results.
+
   Context: do not train all graph variants until the alpha tradeoff is understood on the strongest GNN variant.
 
 - [ ] **Select the mixed-loss alpha using validation only**
@@ -559,6 +564,8 @@ Scope status: **current paper scope, high importance.** This phase corresponds t
   - GNN-Sector MixedLoss
   - GNN-Granger MixedLoss
   - GNN-Ensemble MixedLoss
+
+  Registry requirement: add new rows for all selected-alpha mixed-loss models and the ensemble, including the selected alpha, validation-selection artifact, checkpoint paths, prediction paths, and metric artifact paths.
 
   Context: this tests whether objective alignment benefits all graph types or only the correlation graph.
 
@@ -749,6 +756,8 @@ These tasks strengthen the project but are mostly **future work** for the first 
   - dropout: 0.1, 0.3
   - learning rate: 3e-4, 1e-3
 
+  Registry requirement: if any tuned LSTM model is trained and evaluated, add it as a new registry row with a distinct experiment ID rather than replacing the frozen LSTM baseline row.
+
   Context: GNN-Correlation has received hyperparameter search. LSTM should not remain under-tuned if it is a primary baseline.
 
 - [ ] **Add stronger volatility baselines**
@@ -763,6 +772,8 @@ These tasks strengthen the project but are mostly **future work** for the first 
   - XGBoost or Random Forest tabular model.
   - GARCH-family baseline on a smaller representative universe if full-scale is too expensive.
 
+  Registry requirement: any added baseline must be registered as a new experiment with explicit feature version, split definition, hyperparameters, prediction paths, and metric artifact paths.
+
   Context: finance reviewers will compare against classical volatility models, not only LSTM.
 
 - [ ] **Run multiple random seeds**
@@ -770,6 +781,8 @@ These tasks strengthen the project but are mostly **future work** for the first 
   Scope status: optional but valuable. If compute allows, this improves paper credibility; if not, report single-seed results as a limitation.
 
   For neural models, train at least 3 seeds if compute allows.
+
+  Registry requirement: record each seed as its own registry row or add a seed-level registry artifact that maps every seed to its checkpoint, config, predictions, and metrics before aggregating across seeds.
 
   Context: a single seed is weak for publication. Seed variance can be larger than the MSE differences currently observed.
 
@@ -816,7 +829,7 @@ If work starts now, the next ten concrete tasks should be:
 - [ ] Implement `src/significance.py`.
 - [ ] Generate weekly model error series.
 - [ ] Generate bootstrap Sharpe confidence intervals.
-- [ ] Create the experiment registry.
+- [x] Create the experiment registry.
 - [ ] Resolve GNN hyperparameter/config mismatch.
 - [ ] Fix LSTM hidden-dim default.
 - [ ] Lock universe construction docs to current S&P 500 constituents filtered by historical coverage.
