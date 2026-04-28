@@ -38,10 +38,10 @@ Notebook writing rule for every applicable item: create or update notebooks so t
   Registry behavior: the current registry is schema-forward-compatible but intentionally explicit. New trained models are not auto-discovered from checkpoint files; each training step that creates a new model must add registry rows for the new experiment IDs before the step is complete.
   Notebook output: display the registry in `notebooks/05_evaluate.ipynb` with enough columns visible to audit provenance, and add a small registry-reference cell to model-training notebooks after new runs. Execute/save the affected notebooks with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb` so the registry preview is visible; saved registry should be `data/results/experiment_registry.csv` or `data/results/experiment_registry.json`.
 
-- [ ] **3. Fix reproducibility inconsistencies**
+- [x] **3. Fix reproducibility inconsistencies**
 
   Resolve the GNN hyperparameter/config mismatch, fix the LSTM hidden-dimension default, lock the current-constituent universe language, and standardize sector labels. These are small changes that prevent confusing or invalid comparisons later.
-  Notebook output: add lightweight verification cells where applicable: `notebooks/04_baseline_models.ipynb` for LSTM config, `notebooks/04_gnn_models.ipynb` for official GNN config, and `notebooks/01_data.ipynb` or `notebooks/03_graphs.ipynb` for universe/sector checks. Each verification cell should display the resolved config values or counts directly in the notebook, then be executed/saved with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb`.
+  Notebook output: no need to make any notebook changes.
 
 - [ ] **4. Implement statistical testing infrastructure**
 
@@ -204,7 +204,7 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
   Context: right now, result provenance is spread across docs, JSON files, CSV files, checkpoints, and notebooks. A registry prevents confusion when rerunning models with macro features or mixed loss.
 
-- [ ] **Resolve the tuned GNN hyperparameter inconsistency**
+- [x] **Resolve the tuned GNN hyperparameter inconsistency**
 
   Decide which tuned GNN-Correlation model is official.
 
@@ -222,13 +222,13 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
   Context: a paper cannot report one architecture while the code evaluates another.
 
-- [ ] **Fix LSTM default hidden dimension**
+- [x] **Fix LSTM default hidden dimension**
 
   In `src/models.py`, `LSTMModel` should default to `config.LSTM_HIDDEN_DIM`, not `config.HIDDEN_DIM`.
 
   Context: `config.HIDDEN_DIM` is now a GNN setting. If the LSTM notebook instantiates `LSTMModel(input_size=n_feats)` without passing `hidden_dim`, future training may use the wrong hidden size. This could make baseline results non-reproducible.
 
-- [ ] **Lock the universe construction language to the existing method**
+- [x] **Lock the universe construction language to the existing method**
 
   Use the existing universe construction method and document it consistently.
 
@@ -246,7 +246,7 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
   Context: the project is intentionally sticking with the existing current-constituent full-history universe.
 
-- [ ] **Standardize sector taxonomy**
+- [x] **Standardize sector taxonomy**
 
   Add a canonical sector mapping so code and docs use the same sector labels.
 
@@ -830,10 +830,10 @@ If work starts now, the next ten concrete tasks should be:
 - [ ] Generate weekly model error series.
 - [ ] Generate bootstrap Sharpe confidence intervals.
 - [x] Create the experiment registry.
-- [ ] Resolve GNN hyperparameter/config mismatch.
-- [ ] Fix LSTM hidden-dim default.
-- [ ] Lock universe construction docs to current S&P 500 constituents filtered by historical coverage.
-- [ ] Standardize sector taxonomy.
+- [x] Resolve GNN hyperparameter/config mismatch.
+- [x] Fix LSTM hidden-dim default.
+- [x] Lock universe construction docs to current S&P 500 constituents filtered by historical coverage.
+- [x] Standardize sector taxonomy.
 - [ ] Add calibration and prediction-spread diagnostics.
 - [ ] Add graph-density and regime-breakdown diagnostics.
 

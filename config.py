@@ -56,13 +56,13 @@ GRANGER_MIN_EDGES  = 500            # fall back to BH if Bonferroni yields fewer
 
 # GNN architecture
 SAGE_FLOW  = "source_to_target"     # SAGEConv flow direction; critical for Granger directionality
-HIDDEN_DIM     = 128   # updated from 64 after hparam search (04b_gnn_hparam_search.ipynb)
-GNN_NUM_LAYERS = 3     # updated from 2 after hparam search
+HIDDEN_DIM     = 256   # official tuned GNN-Correlation checkpoint (gnn_hparam_023_best.pt)
+GNN_NUM_LAYERS = 3     # official tuned GNN-Correlation checkpoint
 DROPOUT        = 0.3
 
 # Training
 LEARNING_RATE     = 0.001   # used by LSTM
-GNN_LEARNING_RATE = 3e-4    # used by GNN; updated after hparam search
+GNN_LEARNING_RATE = 1e-3    # used by GNN; official tuned GNN-Correlation checkpoint
 EARLY_STOP_PATIENCE     = 10        # epochs without val improvement before stopping
 CHECKPOINT_EVERY_N_EPOCHS = 5
 

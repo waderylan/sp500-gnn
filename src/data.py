@@ -39,6 +39,30 @@ _COMM_FROM_TELECOM: frozenset[str] = frozenset({
 # 2015 and 2016.  No separate set needed — handled by sector string check.
 
 
+YFINANCE_TO_GICS_SECTOR: dict[str, str] = {
+    "Basic Materials": "Materials",
+    "Communication Services": "Communication Services",
+    "Consumer Cyclical": "Consumer Discretionary",
+    "Consumer Defensive": "Consumer Staples",
+    "Energy": "Energy",
+    "Financial Services": "Financials",
+    "Healthcare": "Health Care",
+    "Industrials": "Industrials",
+    "Real Estate": "Real Estate",
+    "Technology": "Information Technology",
+    "Telecommunication Services": "Telecommunication Services",
+    "Utilities": "Utilities",
+    "Unknown": "Unknown",
+}
+
+
+def canonicalize_sector_label(sector: str | None) -> str:
+    """Map yfinance sector names to canonical GICS-style labels."""
+    if not sector:
+        return "Unknown"
+    return YFINANCE_TO_GICS_SECTOR.get(str(sector), str(sector))
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -99,9 +123,11 @@ def _build_sector_history(tickers: list[str]) -> dict[str, dict[str, str]]:
 
     for ticker in tickers:
         try:
-            current_sector: str = yf.Ticker(ticker).info.get("sector") or "Unknown"
+            yf_sector: str = yf.Ticker(ticker).info.get("sector") or "Unknown"
         except Exception:
-            current_sector = "Unknown"
+            yf_sector = "Unknown"
+
+        current_sector = canonicalize_sector_label(yf_sector)
 
         year_map: dict[str, str] = {}
         for year in years:
@@ -109,14 +135,14 @@ def _build_sector_history(tickers: list[str]) -> dict[str, dict[str, str]]:
 
             # Real Estate correction
             if current_sector == "Real Estate" and year <= 2016:
-                sector = "Financial Services"
+                sector = "Financials"
 
             # Communication Services correction
             if current_sector == "Communication Services" and year <= 2018:
                 if ticker in _COMM_FROM_IT:
-                    sector = "Technology"
+                    sector = "Information Technology"
                 elif ticker in _COMM_FROM_CONSUMER_DISC:
-                    sector = "Consumer Cyclical"
+                    sector = "Consumer Discretionary"
                 elif ticker in _COMM_FROM_TELECOM:
                     sector = "Telecommunication Services"
                 else:

@@ -54,13 +54,17 @@ Does graph structure improve cross-sectional volatility prediction for S&P 500 e
 
 ### Universe
 
-Current S&P 500 constituent stocks with complete daily price and volume data from January 2015 through December 2025. The universe is built by scraping the current S&P 500 constituent table from Wikipedia, converting symbols to yfinance format, downloading historical adjusted close and volume data, and retaining stocks with at least 95% historical price coverage over the sample window. Expected universe size after filtering: approximately 400–465 tickers.
+Current S&P 500 constituent stocks with sufficient daily price and volume data from January 2015 through December 2025. The universe is built by scraping the current S&P 500 constituent table from Wikipedia, converting symbols to yfinance format, downloading historical adjusted close and volume data, and retaining stocks with at least `config.MIN_COVERAGE` historical price coverage over the sample window. The frozen current-constituent universe contains 465 tickers.
+
+| Universe source | Candidate count | Final count | Coverage threshold | Symbol format |
+|---|---:|---:|---:|---|
+| Current Wikipedia S&P 500 constituents | Not persisted by original download | 465 | `config.MIN_COVERAGE = 0.95` | yfinance-compatible symbols |
 
 > **NOTE ON SECTOR CHANGES:** Sector classifications changed materially during the sample period. Most notably, Real Estate was separated from Financials in August 2016, and Telecommunication Services was restructured into Communication Services in September 2018, absorbing media and internet companies from Consumer Discretionary and Information Technology. The sector graph should use year-specific sector assignments rather than a single current-sector mapping. Stocks should be assigned the sector they held at the start of each calendar year where historical sector information is available.
 
 ### Source
 
-Daily OHLCV data from yfinance. The ticker universe comes from the current Wikipedia S&P 500 constituent table and is filtered by historical data coverage. Sector assignments are built from yfinance sector metadata with historical corrections for major sector reclassifications where needed. No premium data sources required.
+Daily OHLCV data from yfinance. The ticker universe comes from the current Wikipedia S&P 500 constituent table and is filtered by historical data coverage. Sector assignments are built from yfinance sector metadata, mapped to canonical GICS-style labels, and adjusted for major sector reclassifications where needed. No premium data sources required.
 
 ### Target Variable: Weekly Realized Volatility
 
@@ -167,21 +171,21 @@ GraphSAGE is selected over alternatives (GCN, GAT, GIN) for the following reason
 
 ### Full Architecture
 
-The architecture below reflects the tuned configuration selected by grid search (Task 4.4b). The original architecture used 2 layers and hidden dim 64; the tuned version uses 3 layers and hidden dim 128. Both are implemented in `src/models.py` as `GNNModel` (original) and `GNNModelV2` (tunable). All reported results use the tuned architecture.
+The architecture below reflects the tuned GNN-Correlation configuration selected by validation MSE in `data/results/gnn_hparam_search_results.json`. The original architecture used 2 layers and hidden dim 64; the official tuned checkpoint uses 3 layers and hidden dim 256. Both are implemented in `src/models.py` as `GNNModel` (original) and `GNNModelV2` (tunable). Reported GNN-Correlation results use the tuned checkpoint.
 
 | **Layer** | **Output Shape** | **Notes** |
 |---|---|---|
 | Input | (465, F) | F = 10 features per stock per week |
-| SAGEConv 1 + ReLU + Dropout | (465, 128) | Hidden dim = 128, dropout = 0.3 |
-| SAGEConv 2 + ReLU + Dropout | (465, 128) | Second message-passing layer |
-| SAGEConv 3 + ReLU + Dropout | (465, 128) | Third message-passing layer; selected by grid search |
+| SAGEConv 1 + ReLU + Dropout | (465, 256) | Hidden dim = 256, dropout = 0.3 |
+| SAGEConv 2 + ReLU + Dropout | (465, 256) | Second message-passing layer |
+| SAGEConv 3 + ReLU + Dropout | (465, 256) | Third message-passing layer; selected by grid search |
 | Linear | (465, 1) | Per-stock scalar prediction |
 | Output | (465,) | Predicted next-week RV per stock |
 
 ### Training Configuration
 
 - Loss function: Mean Squared Error (MSE) against next-week realized volatility
-- Optimizer: Adam, learning rate = 3e-4 for GNN (LSTM uses 1e-3; kept separate in config.py)
+- Optimizer: Adam, learning rate = 1e-3 for the tuned GNN-Correlation checkpoint (LSTM also uses 1e-3 but is configured separately in config.py)
 - LR scheduler: ReduceLROnPlateau — halve LR if validation loss does not improve for 5 epochs
 - Regularization: Dropout 0.3 after each GNN layer; no batch normalization (see grid search results below)
 - Early stopping: patience = 10 epochs based on validation MSE
@@ -205,15 +209,15 @@ Architecture and training hyperparameters for GNN-Correlation were selected by e
 
 Early stopping patience was reduced from 10 to 7 epochs during the search to limit wall time. Each configuration used a precomputed correlation graph dictionary (no recomputation per step). Total search time: approximately 3 hours on an A100 GPU.
 
-**Results (top 5 by validation MSE):**
+**Current official results (top 5 by validation MSE from `gnn_hparam_search_results.json`):**
 
 | Rank | lr | hidden_dim | dropout | batch_norm | num_layers | val MSE |
 |---|---|---|---|---|---|---|
-| 1 | 3e-4 | 128 | 0.3 | False | 3 | 0.019589 |
-| 2 | 1e-3 | 128 | 0.3 | False | 3 | 0.019679 |
-| 3 | 3e-3 | 128 | 0.1 | False | 3 | 0.019681 |
-| 4 | 1e-3 | 64 | 0.1 | False | 3 | 0.019684 |
-| 5 | 1e-3 | 64 | 0.3 | False | 3 | 0.019710 |
+| 1 | 1e-3 | 256 | 0.3 | False | 3 | 0.019646 |
+| 2 | 1e-3 | 128 | 0.3 | False | 3 | 0.019768 |
+| 3 | 1e-3 | 128 | 0.1 | False | 3 | 0.019781 |
+| 4 | 3e-4 | 128 | 0.1 | False | 3 | 0.019788 |
+| 5 | 1e-3 | 256 | 0.1 | False | 3 | 0.020075 |
 
 Baseline (original 2-layer, hidden=64, lr=1e-3): val MSE = 0.019778.
 
@@ -221,9 +225,9 @@ Baseline (original 2-layer, hidden=64, lr=1e-3): val MSE = 0.019778.
 
 - `num_layers=3` appears in all top 5 configurations. This is the dominant signal. A third message-passing hop expands each node's receptive field, which is particularly beneficial on a dense correlation graph where information propagates through multiple intermediary stocks.
 - `batch_norm=False` appears in all top 5. Batch normalization hurt performance across the board. The likely cause: the correlation graph density varies by an order of magnitude between calm and crisis weeks (sparse in 2017, near-fully-connected during March 2020). Running statistics learned during training do not transfer to these structurally different graph regimes, causing BatchNorm1d to distort node embeddings.
-- `hidden_dim=128` is the best single config but 64 appears in positions 3 and 4. This is a secondary effect; depth matters more than width on this dataset.
-- `lr=3e-4` wins the top slot but `lr=1e-3` (the original) appears in 3 of the top 5. Learning rate has lower impact than depth.
-- The improvement from grid search is 1.0% MSE reduction (0.019778 → 0.019589). The DM test in Phase 5 determines whether this is statistically significant against the baselines.
+- `hidden_dim=256` and `lr=1e-3` define the official tuned checkpoint, with no batch normalization and 3 layers.
+- `batch_norm=False` dominates the best configurations. GraphNorm was tested under the `batch_norm=True` flag in the second search but did not win.
+- The improvement from grid search is small in absolute MSE terms. The DM test determines whether this is statistically significant against the baselines.
 
 **Reporting note:** 48 configurations were evaluated on the validation set to select the architecture. This counts toward the total number of hyperparameter decisions made on validation data and should be disclosed in the Experiments section alongside the correlation threshold ablation (3 configurations) and the Granger correction method selection (1 decision). Total validation consultations: 52.
 
@@ -674,10 +678,10 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 - Implement `GNNModelV2` in `src/models.py`: parameterized GraphSAGE supporting variable `num_layers`, `hidden_dim`, `dropout`, and `batch_norm`. Forward interface identical to `GNNModel`.
 - Implement `run_gnn_hparam_search()` in `src/train.py`: iterates over 48 configurations, trains each with reduced patience (7 epochs), saves per-config checkpoints, supports resume after Colab timeout.
 - Run from `notebooks/04b_gnn_hparam_search.ipynb`. Fixed at θ=0.3 (ablation winner). Uses precomputed correlation graphs from disk.
-- After search: copy winning checkpoint to `gnn_corr_hparam_best.pt`. Update `config.py` with winning values (HIDDEN_DIM=128, GNN_NUM_LAYERS=3, GNN_LEARNING_RATE=3e-4).
+- After search: copy winning checkpoint to `gnn_corr_hparam_best.pt`. Update `config.py` with winning values (HIDDEN_DIM=256, GNN_NUM_LAYERS=3, GNN_LEARNING_RATE=1e-3).
 - Update `src/evaluate.py` to load `GNNModelV2` from `gnn_corr_hparam_best.pt` for all subsequent evaluation. Fall back to original `GNNModel` if hparam checkpoint is absent.
 
-**Result:** Best config (lr=3e-4, hidden=128, dropout=0.3, batch_norm=False, num_layers=3), val MSE=0.019589 vs. baseline 0.019778.
+**Result:** Official saved search artifact selects best config (lr=1e-3, hidden=256, dropout=0.3, batch_norm=False, num_layers=3), val MSE=0.019646.
 
 | **Output** | `gnn_corr_hparam_best.pt`. `gnn_hparam_search_results.json`. `config.py` updated. |
 |---|---|

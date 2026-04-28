@@ -230,7 +230,7 @@ class LSTMModel(nn.Module):
     """
 
     def __init__(self, input_size: int,
-                 hidden_dim: int = config.HIDDEN_DIM,
+                 hidden_dim: int = config.LSTM_HIDDEN_DIM,
                  dropout: float = config.DROPOUT) -> None:
         super().__init__()
         self.lstm = nn.LSTM(

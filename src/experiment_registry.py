@@ -95,17 +95,28 @@ def _registry_specs(results_dir: Path) -> dict[str, dict[str, Any]]:
     """Define artifact paths and hyperparameters for the current roster."""
     best_gnn_hparams = _load_best_gnn_hparams(results_dir)
     base = _base_hparams()
-    gnn_base = {
+    frozen_gnnmodel_base = {
         **base,
-        "hidden_dim": config.HIDDEN_DIM,
-        "num_layers": config.GNN_NUM_LAYERS,
+        "architecture": "GNNModel",
+        "hidden_dim": 128,
+        "num_layers": 2,
         "dropout": config.DROPOUT,
-        "learning_rate": config.GNN_LEARNING_RATE,
+        "learning_rate": config.LEARNING_RATE,
         "max_epochs": config.GNN_MAX_EPOCHS,
         "early_stop_patience": config.EARLY_STOP_PATIENCE,
     }
+    tuned_corr_base = {
+        **base,
+        "architecture": "GNNModelV2",
+        "hidden_dim": best_gnn_hparams.get("hidden_dim", config.HIDDEN_DIM),
+        "num_layers": best_gnn_hparams.get("num_layers", config.GNN_NUM_LAYERS),
+        "dropout": best_gnn_hparams.get("dropout", config.DROPOUT),
+        "batch_norm": best_gnn_hparams.get("batch_norm", False),
+        "learning_rate": best_gnn_hparams.get("lr", config.GNN_LEARNING_RATE),
+        "max_epochs": config.GNN_MAX_EPOCHS,
+    }
     rank_loss_base = {
-        **gnn_base,
+        **frozen_gnnmodel_base,
         "pair_sample_frac": config.RANK_LOSS_PAIR_SAMPLE_FRAC,
     }
 
@@ -154,27 +165,28 @@ def _registry_specs(results_dir: Path) -> dict[str, dict[str, Any]]:
             "experiment_id": "baseline_gnn_correlation",
             "feature_version": "stock_features_v1",
             "graph_version": f"correlation_threshold_{config.CORR_THRESHOLD}_lookback_{config.CORR_LOOKBACK_DAYS}",
-            "checkpoint_path": "data/results/checkpoints/gnn_corr_best.pt",
+            "checkpoint_path": "data/results/checkpoints/gnn_corr_hparam_best.pt",
             "hyperparameters": {
-                **gnn_base,
+                **tuned_corr_base,
+                "early_stop_patience": config.GNN_HPARAM_PATIENCE,
                 "corr_threshold": config.CORR_THRESHOLD,
                 "hparam_search_best_config": best_gnn_hparams,
             },
             "validation_metrics_path": "data/results/gnn_corr_th03_val_loss.json",
             "prediction_path": "data/results/test_preds_gnn_corr.parquet",
             "validation_prediction_path": "",
-            "notes": "Registry preserves current evaluated checkpoint; tuned config mismatch is deferred to the reproducibility step.",
+            "notes": "Official tuned GNN-Correlation checkpoint selected by validation MSE from gnn_hparam_search_results.json.",
         },
         "GNN-Sector": {
             "experiment_id": "baseline_gnn_sector",
             "feature_version": "stock_features_v1",
-            "graph_version": "sector_yfinance_labels_v1",
+            "graph_version": "sector_canonical_gics_labels_v1",
             "checkpoint_path": "data/results/checkpoints/gnn_sector_best.pt",
-            "hyperparameters": gnn_base,
+            "hyperparameters": frozen_gnnmodel_base,
             "validation_metrics_path": "data/results/gnn_sector_val_loss.json",
             "prediction_path": "data/results/test_preds_gnn_sector.parquet",
             "validation_prediction_path": "",
-            "notes": "Frozen sector-graph baseline; sector taxonomy standardization remains a later reproducibility item.",
+            "notes": "Frozen sector-graph baseline using canonical sector labels.",
         },
         "GNN-Granger": {
             "experiment_id": "baseline_gnn_granger",
@@ -182,7 +194,7 @@ def _registry_specs(results_dir: Path) -> dict[str, dict[str, Any]]:
             "graph_version": f"granger_lag_{config.GRANGER_LAG}_{config.GRANGER_CORRECTION}",
             "checkpoint_path": "data/results/checkpoints/gnn_granger_best.pt",
             "hyperparameters": {
-                **gnn_base,
+                **frozen_gnnmodel_base,
                 "granger_lag": config.GRANGER_LAG,
                 "granger_correction": config.GRANGER_CORRECTION,
                 "granger_min_edges": config.GRANGER_MIN_EDGES,
@@ -216,7 +228,12 @@ def _registry_specs(results_dir: Path) -> dict[str, dict[str, Any]]:
             "feature_version": "stock_features_v1",
             "graph_version": f"correlation_threshold_{config.CORR_THRESHOLD}_lookback_{config.CORR_LOOKBACK_DAYS}",
             "checkpoint_path": "data/results/checkpoints/gnn_corr_rankloss_best.pt",
-            "hyperparameters": {**rank_loss_base, "corr_threshold": config.CORR_THRESHOLD},
+            "hyperparameters": {
+                **tuned_corr_base,
+                "early_stop_patience": config.GNN_HPARAM_PATIENCE,
+                "pair_sample_frac": config.RANK_LOSS_PAIR_SAMPLE_FRAC,
+                "corr_threshold": config.CORR_THRESHOLD,
+            },
             "validation_metrics_path": "data/results/gnn_corr_rankloss_val_loss.json",
             "prediction_path": "data/results/test_preds_gnn_corr_rankloss.parquet",
             "validation_prediction_path": "",
@@ -225,7 +242,7 @@ def _registry_specs(results_dir: Path) -> dict[str, dict[str, Any]]:
         "Rank-loss GNN-Sector": {
             "experiment_id": "rankloss_gnn_sector",
             "feature_version": "stock_features_v1",
-            "graph_version": "sector_yfinance_labels_v1",
+            "graph_version": "sector_canonical_gics_labels_v1",
             "checkpoint_path": "data/results/checkpoints/gnn_sector_rankloss_best.pt",
             "hyperparameters": rank_loss_base,
             "validation_metrics_path": "data/results/gnn_sector_rankloss_val_loss.json",

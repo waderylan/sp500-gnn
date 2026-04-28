@@ -17,9 +17,9 @@ Rather than patch those drafts, the decision was made to start over with a struc
 
 ### Universe construction
 
-The universe was built from the current S&P 500 constituent list scraped from Wikipedia, then filtered for daily price coverage from 2015 through 2025. Inclusion required at least 95% non-missing adjusted close data over the full sample window. This produces a stable full-history current-constituent universe. Final universe: 465 stocks.
+The universe was built from the current S&P 500 constituent list scraped from Wikipedia, converted to yfinance-compatible symbols, then filtered for daily price coverage from 2015 through 2025. Inclusion required at least `config.MIN_COVERAGE` non-missing adjusted close data over the full sample window (`0.95` in the frozen run). This produces a stable full-history current-constituent universe. Final universe: 465 stocks. The original candidate count was not persisted by the download artifact.
 
-Year-specific sector assignments were required. Sector classifications changed materially twice during the sample: Real Estate separated from Financials in 2016, and Telecom became Communication Services in 2018 while absorbing names from Consumer Discretionary and IT. A `sector_history.json` file maps each ticker to its sector by year so that the sector graph can reflect major historical sector reclassifications rather than using one static current-sector assignment.
+Year-specific sector assignments were required. Sector classifications changed materially twice during the sample: Real Estate separated from Financials in 2016, and Telecom became Communication Services in 2018 while absorbing names from Consumer Discretionary and Information Technology. A `sector_history.json` file maps each ticker to its canonical GICS-style sector by year so that the sector graph can reflect major historical sector reclassifications rather than using one static current-sector assignment.
 
 ### Target construction and the 1-step-ahead design
 
@@ -106,11 +106,11 @@ A 2-layer LSTM with hidden size 64 and dropout 0.3, processing each stock's feat
 
 ### Architecture
 
-`GNNModel` uses two SAGEConv layers with hidden dimension 64, followed by a linear output head. All three graph variants use the same class. The graph is passed at forward time, not stored in the model, so the same code handles the dynamic correlation graph (different edges each week), the annual sector graph, and the static Granger graph.
+`GNNModel` is the original two-layer GraphSAGE implementation. `GNNModelV2` is the tunable GraphSAGE implementation used for the official tuned GNN-Correlation checkpoint. The graph is passed at forward time, not stored in the model, so the same code path handles the dynamic correlation graph (different edges each week), the annual sector graph, and the static Granger graph.
 
 ### Training three variants
 
-GNN-Correlation, GNN-Sector, and GNN-Granger were trained sequentially under identical conditions: Adam optimizer, learning rate 1e-3, early stopping on validation MSE with patience 10, chronological iteration over training weeks (never shuffled). Checkpoints saved every 5 epochs to handle Colab session drops.
+The original GNN-Correlation, GNN-Sector, and GNN-Granger runs were trained sequentially under identical conditions: Adam optimizer, learning rate 1e-3, early stopping on validation MSE with patience 10, chronological iteration over training weeks (never shuffled). The official evaluated GNN-Correlation row now points to the tuned `GNNModelV2` checkpoint selected by validation MSE; sector and Granger frozen baselines retain their original checkpoints.
 
 GNN-Sector was fastest: the graph changes only annually. GNN-Correlation was slowest because `build_correlation_graph()` was recomputed at every training step. On the 465-stock full universe, each `.corr()` call over a 252-day window took 200-400ms. Across three threshold values, 150 epochs, and ~470 train+val weeks, this amounted to roughly 210,000 correlation matrix computations. The training loop was spending most of its time on CPU-bound graph construction while the A100 sat idle.
 
@@ -308,7 +308,7 @@ All 96 round 1 checkpoint and val_loss JSON files were deleted so the resumable 
 
 - No round 2 config beat the round 1 winner (0.019589). The best round 2 config (0.019646) is 0.29% worse. Increasing hidden_dim to 256 and exploring lower learning rates did not yield gains.
 - `batch_norm=False` still dominates the top 5. GraphNorm first appears at rank 6 (0.020094), a full 2.3% behind the round 2 winner. This is an improvement over BatchNorm, which never cracked the top 10 in round 1, confirming that GraphNorm is less harmful. But it is still not competitive with no normalization on this dataset.
-- The round 1 winner (lr=3e-4, hidden=128, dropout=0.3, no norm, 3 layers, val MSE=0.019589) remains the best configuration found across both searches. `config.py` retains those values.
+- The official saved search artifact selects the round 2 top slot: lr=1e-3, hidden=256, dropout=0.3, no norm, 3 layers, val MSE=0.019646. `config.py` is aligned to this checkpoint for future tuned GNN-Correlation runs.
 - `hidden_dim=256` won the top slot but by a narrow margin over hidden=128 configs, and it performed poorly at lower learning rates (ranks 5 and 10). The width benefit is inconsistent.
 - `lr=1e-3` dominates the top 3 slots. The round 1 finding that lr=3e-4 won was not replicated; at the higher width of 256 and with GraphNorm absent, 1e-3 is preferred.
 
@@ -378,7 +378,7 @@ The approach chosen is pairwise BPR (Bayesian Personalized Ranking) loss. For a 
 
 The key property of this loss: gradients exist only through the prediction differences, not through absolute values. The model is free to output predictions at any scale, as long as the relative ordering is correct. This separation from absolute scale would turn out to be important.
 
-Three new models were trained in `notebooks/04c_rank_loss_models.ipynb`, one per graph type, using the same architecture as the MSE models: GNNModelV2 for Correlation (hparam-tuned config), GNNModel for Sector and Granger. Checkpoints use `_rankloss` suffixes and predictions are saved separately, leaving the MSE models fully intact.
+Three new models were trained in `notebooks/04c_rank_loss_models.ipynb`, one per graph type, using the same architecture family as the corresponding MSE models: GNNModelV2 for Correlation (hparam-tuned config), GNNModel for Sector and Granger. Checkpoints use `_rankloss` suffixes and predictions are saved separately, leaving the MSE models fully intact.
 
 ### Training behavior
 
