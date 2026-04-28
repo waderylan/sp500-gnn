@@ -255,7 +255,7 @@ def build_sector_graph(tickers: list[str],
     Build an undirected sector graph for a given calendar year.
 
     Connects all pairs of stocks sharing the same GICS sector in `year`,
-    using point-in-time sector assignments from sector_history.
+    using year-specific sector assignments from sector_history.
     Both directions included. Self-loops excluded.
 
     tickers: Ordered list of ticker symbols (defines node indices).
@@ -265,7 +265,7 @@ def build_sector_graph(tickers: list[str],
     Returns edge_index of shape (2, num_edges) as LongTensor.
 
     Lookahead safety: no price/return data used. Sector assignments are
-    point-in-time for the start of `year`, known before any week in that year.
+    year-specific for `year`, known before any week in that year.
     Shape assertions: edge_index.shape[0] == 2, edge_index.max() < len(tickers).
     """
     year_key = str(year)

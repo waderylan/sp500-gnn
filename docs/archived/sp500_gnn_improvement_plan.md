@@ -379,7 +379,7 @@ Exclude two sectors for the portfolio backtest only (not for model training or M
 
 Do not exclude any other sectors. The exclusion is pre-specified based on the structural argument above, not by observing test-period returns. The paper must state this justification explicitly.
 
-The sector assignments for each week are read from `data/raw/sector_history.json` using the point-in-time year lookup, consistent with the rest of the pipeline.
+The sector assignments for each week are read from `data/raw/sector_history.json` using the year-specific sector lookup, consistent with the rest of the pipeline.
 
 ---
 

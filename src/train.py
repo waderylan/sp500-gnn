@@ -504,7 +504,7 @@ def train_gnn_sector(
     max_epochs: int = config.GNN_MAX_EPOCHS,
 ) -> tuple[GNNModel, list[float]]:
     """
-    Train GNN-Sector using annual point-in-time GICS sector graphs.
+    Train GNN-Sector using annual year-specific sector graphs.
 
     At each time step T, looks up sector_graphs[week.year] to get the graph.
     No price or return data enters edge construction. The sector assignment
@@ -522,7 +522,7 @@ def train_gnn_sector(
     Checkpoint: config.CHECKPOINTS_DIR / "gnn_sector_best.pt"
     Val loss:   config.DATA_RESULTS_DIR / "gnn_sector_val_loss.json"
 
-    Lookahead safety: sector assignments are point-in-time at the start of each
+    Lookahead safety: sector assignments are fixed for each calendar year and
     calendar year. No return or price data is used in edge construction.
     Shape assertion: all years in week_index must be present as keys in sector_graphs.
     """

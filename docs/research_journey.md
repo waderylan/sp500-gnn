@@ -17,9 +17,9 @@ Rather than patch those drafts, the decision was made to start over with a struc
 
 ### Universe construction
 
-The universe was built from S&P 500 constituent stocks with daily price data from 2015 through 2025. Inclusion required at least 95% data coverage AND constituent membership for at least 80% of total sample weeks. Stocks that entered the index after January 2016 or were removed before December 2024 were excluded. This filters out survivorship bias at the tails while keeping the stable core of the index. Final universe: 465 stocks.
+The universe was built from the current S&P 500 constituent list scraped from Wikipedia, then filtered for daily price coverage from 2015 through 2025. Inclusion required at least 95% non-missing adjusted close data over the full sample window. This produces a stable full-history current-constituent universe. Final universe: 465 stocks.
 
-Point-in-time sector assignments were required. GICS classifications changed materially twice during the sample: Real Estate separated from Financials in 2016, and Telecom became Communication Services in 2018 while absorbing names from Consumer Discretionary and IT. A `sector_history.json` file maps each ticker to its sector by year so that the sector graph uses the correct classification at each point in time rather than current assignments.
+Year-specific sector assignments were required. Sector classifications changed materially twice during the sample: Real Estate separated from Financials in 2016, and Telecom became Communication Services in 2018 while absorbing names from Consumer Discretionary and IT. A `sector_history.json` file maps each ticker to its sector by year so that the sector graph can reflect major historical sector reclassifications rather than using one static current-sector assignment.
 
 ### Target construction and the 1-step-ahead design
 
@@ -67,7 +67,7 @@ Threshold θ was tuned on the validation set across {0.3, 0.5, 0.7}. The winner 
 
 Stocks sharing the same GICS sector in a given calendar year are connected. The graph changes annually to reflect reclassifications. It encodes fundamental economic structure rather than return co-movement. It is coarser than the correlation graph but more stable: sector membership does not fluctuate week to week.
 
-The sector graph was pre-built for all years 2015-2025 using the point-in-time sector history. Saved to `data/graphs/sector_edges_by_year.parquet`.
+The sector graph was pre-built for all years 2015-2025 using the year-specific sector history. Saved to `data/graphs/sector_edges_by_year.parquet`.
 
 ### Granger causality graph (static, directed)
 

@@ -54,13 +54,13 @@ Does graph structure improve cross-sectional volatility prediction for S&P 500 e
 
 ### Universe
 
-S&P 500 constituent stocks with complete daily price and volume data from January 2015 through December 2025. The universe is restricted to stocks that were S&P 500 constituents for the majority of the sample period, using point-in-time constituent lists to avoid survivorship bias. Stocks are included if they have at least 95% data coverage AND were index constituents for at least 80% of the total sample weeks. Stocks that entered the index after January 2016 or were removed before December 2024 are excluded. This exclusion criteria must be documented explicitly in the paper as a limitation, as it biases the universe toward more stable, established companies. Expected universe size after filtering: approximately 400–462 tickers.
+Current S&P 500 constituent stocks with complete daily price and volume data from January 2015 through December 2025. The universe is built by scraping the current S&P 500 constituent table from Wikipedia, converting symbols to yfinance format, downloading historical adjusted close and volume data, and retaining stocks with at least 95% historical price coverage over the sample window. Expected universe size after filtering: approximately 400–465 tickers.
 
-> **NOTE ON GICS SECTOR CHANGES:** GICS sector classifications changed materially during the sample period. Most notably, Real Estate was separated from Financials in August 2016, and the Telecommunication Services sector was restructured into Communication Services in September 2018, absorbing media and internet companies from Consumer Discretionary and Information Technology. The sector graph must use point-in-time sector assignments rather than current assignments. Stocks should be assigned the sector they held at the start of each calendar year. This requires maintaining a sector assignment history table rather than a single static mapping.
+> **NOTE ON SECTOR CHANGES:** Sector classifications changed materially during the sample period. Most notably, Real Estate was separated from Financials in August 2016, and Telecommunication Services was restructured into Communication Services in September 2018, absorbing media and internet companies from Consumer Discretionary and Information Technology. The sector graph should use year-specific sector assignments rather than a single current-sector mapping. Stocks should be assigned the sector they held at the start of each calendar year where historical sector information is available.
 
 ### Source
 
-Daily OHLCV data from yfinance (free, reliable for historical S&P 500 data). Point-in-time sector membership from Wikipedia GICS table cross-referenced against SEC filings for reclassification dates. No premium data sources required.
+Daily OHLCV data from yfinance. The ticker universe comes from the current Wikipedia S&P 500 constituent table and is filtered by historical data coverage. Sector assignments are built from yfinance sector metadata with historical corrections for major sector reclassifications where needed. No premium data sources required.
 
 ### Target Variable: Weekly Realized Volatility
 
@@ -455,8 +455,8 @@ Tasks are ordered by dependency. Each task has an explicit input, output, and ve
 
 ### Task 1.2 — Price Download and Universe Construction
 
-- Implement src/data.py: download_prices() function using yfinance batch download for S&P 500 tickers
-- Source point-in-time constituent list: use the Wikipedia historical S&P 500 changes table to identify which tickers were members during the study period. Exclude tickers added after January 2016 or removed before December 2024.
+- Implement src/data.py: download_prices() function using yfinance batch download for current S&P 500 tickers scraped from Wikipedia
+- Apply historical price-coverage filtering using `config.MIN_COVERAGE`; keep tickers with at least 95% non-missing adjusted close data over the sample period.
 - Filter to stocks with >= 95% data coverage across 2015–2025 (threshold in config.py)
 - Save filtered daily OHLCV as data/raw/prices.parquet
 - Save final ticker list as data/raw/tickers.json
@@ -877,7 +877,7 @@ All figures must have consistent styling: Arial font, figure size (10, 6) or (12
 
 ### Task 6.2 — Methodology Section
 
-- Write data subsection: universe construction criteria (including survivorship discussion), RV computation formula, train/val/test split rationale, GICS sector history handling
+- Write data subsection: current-constituent universe construction, coverage filtering criteria, RV computation formula, train/val/test split rationale, and sector history handling
 - Write features subsection: feature list with brief motivation for each group. Mention winsorization before normalization.
 - Write graph construction subsection: one paragraph per graph type, covering construction procedure, directionality, stationarity assumptions, and key limitation. Include SAGEConv directionality verification note for Granger graph.
 - Write model architecture subsection: GraphSAGE description, architecture table, training configuration. Note pooled HAR as additional baseline.
@@ -911,7 +911,7 @@ All figures must have consistent styling: Arial font, figure size (10, 6) or (12
 ### Task 6.5 — Conclusion, Limitations, Future Work
 
 - Write conclusion: summarize findings, state what they imply for practitioners
-- Write limitations honestly: Granger causality sensitivity to lag selection, static feature set, single equity market, no fundamental data, survivorship bias in universe construction, multiple validation set consultations, stationarity assumption in static Granger graph
+- Write limitations honestly: Granger causality sensitivity to lag selection, static feature set, single equity market, no fundamental data, current-constituent universe construction, multiple validation set consultations, stationarity assumption in static Granger graph
 - Write future work: temporal GNN component, macro-conditioned graphs, multi-market extension, dynamic Granger graph with rolling window recomputation
 - Target: 0.5 page
 
@@ -1001,9 +1001,9 @@ Target: 8–10 pages in NeurIPS workshop format. Submitted to FinML Workshop at 
 | Abstract | 150 words | Problem, method, key result with significance statement, implication |
 | 1. Introduction | 1 page | Motivation, gap, 3 explicit contributions, results preview |
 | 2. Related Work | 1.5 pages | Volatility forecasting, GNNs for finance, graph construction methods |
-| 3. Methodology | 3 pages | Data (with universe construction details), features, three graph types, GNN architecture, portfolio construction, significance testing framework |
+| 3. Methodology | 3 pages | Data (with current-constituent universe construction details), features, three graph types, GNN architecture, portfolio construction, significance testing framework |
 | 4. Experiments | 2.5 pages | ML metrics table (with DM test p-values), portfolio metrics table (with bootstrap CIs), ablation studies, significance summary |
-| 5. Conclusion | 0.5 pages | Findings, limitations (including survivorship bias and validation set usage), future work |
+| 5. Conclusion | 0.5 pages | Findings, limitations (including current-constituent universe construction and validation set usage), future work |
 | References | ~0.5 pages | 10–15 citations |
 
 ## Key Citations to Include

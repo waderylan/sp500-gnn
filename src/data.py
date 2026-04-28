@@ -19,11 +19,11 @@ import pandas as pd
 import config
 
 # ---------------------------------------------------------------------------
-# GICS reclassification tables (point-in-time sector correction)
+# GICS reclassification tables (year-specific sector correction)
 # ---------------------------------------------------------------------------
 # Communication Services sector was created September 2018. These sets identify
 # which current CommSvcs tickers migrated from each prior sector, enabling us
-# to assign the correct point-in-time sector for years 2015–2018.
+# to assign the historically appropriate sector for years 2015-2018.
 
 _COMM_FROM_IT: frozenset[str] = frozenset({
     "GOOGL", "GOOG", "META", "ATVI", "EA", "TTWO",
@@ -79,7 +79,7 @@ def _get_sp500_universe() -> list[str]:
 
 def _build_sector_history(tickers: list[str]) -> dict[str, dict[str, str]]:
     """
-    Build a point-in-time GICS sector mapping for each ticker across 2015–2025.
+    Build a year-specific sector mapping for each ticker across 2015-2025.
 
     Fetches the current sector from yfinance, then applies two historical corrections:
       1. Real Estate tickers → "Financials" for years 2015–2016 (split Aug 2016).
@@ -145,7 +145,7 @@ def download_prices() -> pd.DataFrame:
       3. Drop tickers with < config.MIN_COVERAGE non-NaN days. This is the primary
          inclusion filter: stocks added to the index recently lack 2015-era data
          and fail the 95% threshold naturally.
-      4. Build point-in-time sector history and apply GICS reclassification corrections.
+      4. Build year-specific sector history and apply GICS reclassification corrections.
       5. Save prices.parquet, tickers.json, sector_history.json to DATA_RAW_DIR.
 
     Lookahead safety: no rolling windows; filters use only static constituent data.
