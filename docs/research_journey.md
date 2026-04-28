@@ -287,11 +287,38 @@ All 96 round 1 checkpoint and val_loss JSON files were deleted so the resumable 
 
 **What to watch in round 2:** if `batch_norm=True` (GraphNorm) configs appear in the top 5 where BatchNorm never did, that confirms the normalization was suppressing cross-sectional signal. If they still do not appear, the issue is elsewhere, which points toward Phase 6 of the improvement plan: rank-based training loss.
 
+### Round 2 results
+
+**Top 10 configs (sorted by val MSE):**
+
+| Rank | lr | hidden_dim | dropout | batch_norm | num_layers | val MSE | vs round 1 best (%) |
+|---|---|---|---|---|---|---|---|
+| 1 | 1e-3 | 256 | 0.3 | False | 3 | 0.019646 | +0.29 |
+| 2 | 1e-3 | 128 | 0.3 | False | 3 | 0.019768 | +0.91 |
+| 3 | 1e-3 | 128 | 0.1 | False | 3 | 0.019781 | +0.98 |
+| 4 | 3e-4 | 128 | 0.1 | False | 3 | 0.019788 | +1.02 |
+| 5 | 1e-3 | 256 | 0.1 | False | 3 | 0.020075 | +2.48 |
+| 6 | 3e-4 | 128 | 0.3 | True (GraphNorm) | 3 | 0.020094 | +2.58 |
+| 7 | 1e-3 | 128 | 0.3 | True (GraphNorm) | 3 | 0.020249 | +3.37 |
+| 8 | 3e-4 | 256 | 0.3 | False | 3 | 0.020418 | +4.23 |
+| 9 | 1e-4 | 128 | 0.3 | False | 3 | 0.020489 | +4.60 |
+| 10 | 3e-4 | 256 | 0.1 | False | 3 | 0.020533 | +4.82 |
+
+**Key findings from round 2:**
+
+- No round 2 config beat the round 1 winner (0.019589). The best round 2 config (0.019646) is 0.29% worse. Increasing hidden_dim to 256 and exploring lower learning rates did not yield gains.
+- `batch_norm=False` still dominates the top 5. GraphNorm first appears at rank 6 (0.020094), a full 2.3% behind the round 2 winner. This is an improvement over BatchNorm, which never cracked the top 10 in round 1, confirming that GraphNorm is less harmful. But it is still not competitive with no normalization on this dataset.
+- The round 1 winner (lr=3e-4, hidden=128, dropout=0.3, no norm, 3 layers, val MSE=0.019589) remains the best configuration found across both searches. `config.py` retains those values.
+- `hidden_dim=256` won the top slot but by a narrow margin over hidden=128 configs, and it performed poorly at lower learning rates (ranks 5 and 10). The width benefit is inconsistent.
+- `lr=1e-3` dominates the top 3 slots. The round 1 finding that lr=3e-4 won was not replicated; at the higher width of 256 and with GraphNorm absent, 1e-3 is preferred.
+
+**Conclusion on normalization:** GraphNorm is a genuine improvement over BatchNorm (moves from outside top 10 to rank 6-7) but does not close the gap to no normalization. The cross-sectional signal preservation problem is real, but GraphNorm's learnable alpha does not fully solve it. If ranking accuracy is the goal, the next intervention is a rank-based training loss (Phase 6), not further normalization tuning.
+
 ---
 
 ## Open questions
 
-- Does GraphNorm produce meaningful IC improvement after retraining? (Round 2 hparam search, re-evaluate.)
+- Round 2 hparam search is complete. The round 1 winner (lr=3e-4, hidden=128, dropout=0.3, no norm, 3 layers) remains best. No retraining needed unless Phase 6 is pursued.
 - Do the long-short / vol-targeted / min-var portfolio constructions show a GNN advantage that MSE and IC obscure?
-- Phase 5 (GNN ensemble) is still pending. No retraining needed; can be run against existing or new checkpoints.
-- If GraphNorm does not help, Phase 6 (rank-based loss) is the next architectural change to try.
+- Phase 5 (GNN ensemble) is still pending. No retraining needed; can be run against existing checkpoints.
+- GraphNorm did not close the gap to no normalization. Phase 6 (rank-based loss, e.g. ListMLE or a Spearman IC surrogate) is the next architectural change to try if portfolio results remain flat.
