@@ -640,3 +640,74 @@ def run_test_evaluation(
     pooled_df.to_csv(results_dir / "ml_metrics_table.csv")
 
     return pooled_df, sector_dict
+
+
+def build_gnn_ensemble_preds(results_dir: Path) -> pd.DataFrame:
+    """
+    Build an inverse-val-MSE weighted ensemble of the three GNN variants.
+
+    Reads validation MSEs from validation_summary.json. Each GNN variant is matched
+    by prefix so both the standard label ("GNN-Correlation (θ=0.3)") and the
+    hparam-tuned label ("GNN-Correlation (tuned)") are handled without changes here.
+
+    Ensemble weight for variant k: w_k = (1 / MSE_k) / sum_j(1 / MSE_j).
+    This upweights variants with lower validation error.
+
+    results_dir: path to config.DATA_RESULTS_DIR. Must already contain
+                 validation_summary.json and test_preds_gnn_{corr,sector,granger}.parquet.
+    Returns: DataFrame of shape (num_test_weeks, num_stocks), weighted-average predictions.
+
+    Saves: results_dir / test_preds_gnn_ensemble.parquet.
+
+    Shape assertion: all three input parquets must have identical shape; output matches.
+    Lookahead safety: pure arithmetic on pre-saved parquets. No date windowing.
+    """
+    summary    = json.load(open(results_dir / "validation_summary.json"))
+    val_models = summary["models"]  # {label: {mse, mae, r2}}
+
+    # Map parquet stem -> validation-summary key prefix. Prefix match decouples this
+    # function from whatever label suffix the training run used.
+    _PREFIX_MAP: dict[str, str] = {
+        "gnn_corr":    "GNN-Correlation",
+        "gnn_sector":  "GNN-Sector",
+        "gnn_granger": "GNN-Granger",
+    }
+
+    def _val_mse(prefix: str) -> float:
+        matches = [k for k in val_models if k.startswith(prefix)]
+        if len(matches) != 1:
+            raise KeyError(
+                f"Expected 1 validation summary key starting with '{prefix}', got {matches}"
+            )
+        return float(val_models[matches[0]]["mse"])
+
+    inv_mse = {stem: 1.0 / _val_mse(prefix) for stem, prefix in _PREFIX_MAP.items()}
+    total   = sum(inv_mse.values())
+    weights = {stem: v / total for stem, v in inv_mse.items()}
+
+    pred_dfs = {
+        stem: pd.read_parquet(results_dir / f"test_preds_{stem}.parquet")
+        for stem in _PREFIX_MAP
+    }
+
+    shapes    = {stem: df.shape for stem, df in pred_dfs.items()}
+    ref_shape = next(iter(shapes.values()))
+    assert all(s == ref_shape for s in shapes.values()), (
+        f"GNN prediction shape mismatch: {shapes}"
+    )
+
+    ref_df   = next(iter(pred_dfs.values()))
+    ensemble = sum(weights[stem] * pred_dfs[stem].values for stem in _PREFIX_MAP)
+    result   = pd.DataFrame(ensemble, index=ref_df.index, columns=ref_df.columns)
+
+    assert result.shape == ref_shape, (
+        f"Ensemble shape {result.shape} != expected {ref_shape}"
+    )
+
+    out_path = results_dir / "test_preds_gnn_ensemble.parquet"
+    result.to_parquet(out_path)
+
+    weight_str = "  ".join(f"{stem}={w:.4f}" for stem, w in weights.items())
+    print(f"GNN ensemble weights: {weight_str}")
+    print(f"Saved: {out_path}")
+    return result

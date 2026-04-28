@@ -1,6 +1,6 @@
 # Implementation Plan — Improving Portfolio Results
 
-Version 1.1 · Focus: Extracting Existing Signal Before Model Changes
+Version 1.2 · Focus: Extracting Existing Signal Before Model Changes
 
 ---
 
@@ -26,8 +26,10 @@ The following tasks must be completed in sequence:
 - [x] 2. Volatility-targeted portfolio  
 - [x] 3. Minimum variance portfolio  
 - [x] 4. Rank IC evaluation metric  
-- [ ] 5. GNN ensemble (prediction averaging)  
+- [x] 5. GNN ensemble (prediction averaging)  
 - [ ] 6. (Optional, next phase) Rank-based training loss  
+- [ ] 7. Ex-sector robustness check (IT + Communication Services exclusion)  
+- [ ] 8. Sector-neutral portfolio construction  
 
 No model retraining should occur before Tasks 1–5 are completed and analyzed.
 
@@ -272,7 +274,223 @@ Do not proceed to model changes until:
 
 ---
 
+# Phase 7 — Ex-Sector Robustness Check
+
+## Goal
+
+Test whether GNN performance during the 2024-2025 test period is genuinely driven by volatility prediction skill or is instead an artifact of sector-level concentration in Information Technology and Communication Services — two sectors that experienced an AI-driven structural expansion that has no analog in the 2015-2023 training period.
+
+The 2024-2025 regime is characterized by a narrow set of large-cap tech names (the "Magnificent 7") generating outsized returns alongside persistently elevated realized volatility. An inverse-volatility portfolio that over- or under-weights these names will exhibit performance that is determined by sector exposure, not cross-sectional ranking within sectors. This phase isolates whether the GNN's predictions add value outside of that regime distortion.
+
+This analysis is reported as a robustness check alongside the primary full-universe results. It does not replace the primary results.
+
+---
+
+## Which Sectors to Exclude
+
+Exclude two sectors for the portfolio backtest only (not for model training or ML metrics):
+
+- **Information Technology** (GICS code: 45): Dominated by semiconductor and software names that drove the 2024-2025 rally. The GNN's predicted vol for these names will be systematically lower than realized vol during the AI expansion period, causing the inverse-vol portfolio to over-weight them precisely when they are most richly valued.
+- **Communication Services** (GICS code: 50): Contains Alphabet, Meta, and Netflix, which reclassified from Telecom in 2018 and behaved similarly to IT names during 2024-2025. Including these alongside IT captures the full scope of the AI-driven sector.
+
+Do not exclude any other sectors. The exclusion is pre-specified based on the structural argument above, not by observing test-period returns. The paper must state this justification explicitly.
+
+The sector assignments for each week are read from `data/raw/sector_history.json` using the point-in-time year lookup, consistent with the rest of the pipeline.
+
+---
+
+## Construction
+
+At each test week t:
+
+- Look up each ticker's sector using `sector_history[ticker][str(week.year)]`
+- Remove tickers assigned to "Information Technology" or "Communication Services"
+- Run the existing inverse-volatility weighting on the reduced universe using the same `compute_weights()` function
+- Apply the same `MAX_WEIGHT` cap and re-normalization
+
+The number of stocks in the reduced universe will vary by week due to reclassifications, but should remain approximately 340-380 stocks across the test period.
+
+---
+
+## Implementation
+
+### `config.py`
+
+Add:
+
+```python
+EXCLUDED_SECTORS_ROBUSTNESS = ["Information Technology", "Communication Services"]
+```
+
+### `src/portfolio.py`
+
+Add a helper that filters predictions and the ticker list by sector:
+
+```python
+def filter_universe_by_sector(
+    preds_row: pd.Series,
+    sector_map: dict,
+    excluded_sectors: list,
+) -> pd.Series:
+    """
+    Remove tickers belonging to any sector in excluded_sectors.
+
+    preds_row: predicted RV for one time step, indexed by ticker
+    sector_map: {ticker: sector_name} for the relevant year
+    excluded_sectors: list of sector names to remove
+
+    Returns a filtered Series with excluded tickers dropped.
+    """
+    keep = [t for t in preds_row.index if sector_map.get(t, "") not in excluded_sectors]
+    return preds_row.loc[keep]
+```
+
+Add `run_all_model_backtests_ex_sector()` that wraps the existing `run_backtest()` but applies `filter_universe_by_sector` at each test week before passing predictions to `compute_weights()`. The function accepts `excluded_sectors=config.EXCLUDED_SECTORS_ROBUSTNESS`. Saves to `portfolio_exsector_returns.parquet` and `portfolio_exsector_metrics_table.csv`.
+
+The sector_map at week t is built by calling:
+
+```python
+year = week_date.year
+sector_map = {ticker: sector_history[ticker][str(year)] for ticker in tickers if str(year) in sector_history[ticker]}
+```
+
+Pass this into `filter_universe_by_sector` at each time step inside the backtest loop.
+
+### `notebooks/06_portfolio.ipynb`
+
+Add a section after the min-var section. Call `run_all_model_backtests_ex_sector`, display the metrics table side-by-side with the full-universe metrics, and plot cumulative returns for both on the same axes. Print the number of stocks in the reduced universe at the first and last test week to confirm the filter is working.
+
+---
+
+## Anticipated Outcomes
+
+**If GNN performance improves in the ex-sector universe:** This is evidence that IT/Communication Services concentration was masking the model's signal. The paper can argue that the GNN's volatility predictions are predictive within the broader market but that the 2024-2025 tech regime created a sector-timing problem that the inverse-vol weighting could not handle. This is a constructive finding.
+
+**If GNN performance is unchanged or worsens:** This is also informative. It means the GNN's ranking signal does not depend on sector composition, which is a stronger robustness claim. The paper reports this as evidence that performance generalizes across sector regimes.
+
+**Expected direction:** The equal-weight benchmark will likely underperform more in the ex-sector universe (losing exposure to the tech rally), while the GNN-based portfolios may show relatively better Sharpe ratios due to lower realized drawdowns. The Rank IC numbers, which are computed over the full universe regardless of portfolio construction, should be unaffected by this phase and serve as the clean ML-level comparison.
+
+---
+
+# Phase 8 — Sector-Neutral Portfolio Construction
+
+## Goal
+
+Reweight each model's predictions so that the portfolio holds equal gross exposure across GICS sectors at every time step. This construction isolates the GNN's ability to rank stocks within sectors, eliminating any sector-timing component entirely.
+
+This is a stronger paper contribution than Phase 7 because it makes no assumption about which sectors are problematic. Instead, it neutralizes sector effects by construction, making the GNN's within-sector cross-sectional signal the only source of active return. If GNN-based portfolios outperform equal-weight under sector-neutral construction, the result is attributable to stock-level volatility prediction rather than sector allocation.
+
+---
+
+## Construction
+
+At each week t:
+
+1. Determine which tickers are in each GICS sector using `sector_history[ticker][str(week.year)]`
+2. For each sector s, compute inverse-volatility weights for the stocks in that sector:
+   - `raw_w_s = 1.0 / predicted_rv[stocks_in_s]`
+   - `raw_w_s = raw_w_s.clip(max=implied_sector_max)` (see note below on weight cap)
+   - `w_s = raw_w_s / raw_w_s.sum()` (weights sum to 1.0 within sector)
+3. Scale each sector's weights by `1.0 / num_active_sectors` so that all sectors receive equal gross weight and the total portfolio sums to 1.0
+4. Sectors with fewer than `MIN_SECTOR_SIZE` stocks (see config) are dropped from that week and the remaining sectors are re-normalized to sum to 1.0
+
+The within-sector MAX_WEIGHT cap must be applied at the sector level before the cross-sector scaling step. If a sector has only 5 stocks, the per-stock cap should be `1.0 / MIN_SECTOR_SIZE`, not `config.MAX_WEIGHT`, to avoid degenerate equal-weight behavior inside tiny sectors. Use `max(config.MAX_WEIGHT, 1.0 / len(stocks_in_s))` as the effective cap for each sector.
+
+---
+
+## Implementation
+
+### `config.py`
+
+Add:
+
+```python
+MIN_SECTOR_SIZE = 5  # sectors with fewer stocks than this are excluded from the sector-neutral portfolio
+```
+
+### `src/portfolio.py`
+
+Add:
+
+```python
+def build_sector_neutral_weights(
+    preds_row: pd.Series,
+    sector_map: dict,
+    max_weight: float,
+    min_sector_size: int,
+) -> pd.Series:
+    """
+    Construct a sector-neutral inverse-volatility portfolio for one time step.
+
+    Assigns equal gross weight to each active GICS sector, then allocates
+    within each sector using inverse-volatility weighting. Sectors with
+    fewer than min_sector_size stocks are excluded for that week.
+
+    preds_row: predicted RV indexed by ticker, one time step
+    sector_map: {ticker: sector_name} for the relevant year
+    max_weight: per-stock MAX_WEIGHT from config (applied at sector level)
+    min_sector_size: minimum stocks required to include a sector
+
+    Returns a pd.Series of portfolio weights indexed by ticker, summing to 1.0.
+    Lookahead safety: uses only preds_row and sector_map, both available at week T.
+    """
+    from collections import defaultdict
+
+    sector_buckets = defaultdict(list)
+    for ticker in preds_row.index:
+        sector = sector_map.get(ticker)
+        if sector is not None:
+            sector_buckets[sector].append(ticker)
+
+    active_sectors = {s: tickers for s, tickers in sector_buckets.items()
+                      if len(tickers) >= min_sector_size}
+
+    if len(active_sectors) == 0:
+        n = len(preds_row)
+        return pd.Series(1.0 / n, index=preds_row.index)
+
+    sector_weight = 1.0 / len(active_sectors)
+    all_weights = pd.Series(0.0, index=preds_row.index)
+
+    for sector, tickers in active_sectors.items():
+        rv_s = preds_row.loc[tickers]
+        effective_cap = max(max_weight, 1.0 / len(tickers))
+        raw_w = 1.0 / rv_s
+        raw_w = raw_w.clip(upper=effective_cap * raw_w.sum())  # pre-clip before normalization
+        w = raw_w / raw_w.sum()
+        w = w.clip(upper=effective_cap)
+        w = w / w.sum()  # re-normalize after clip
+        all_weights.loc[tickers] = w * sector_weight
+
+    total = all_weights.sum()
+    assert abs(total - 1.0) < 1e-6, f"Sector-neutral weights sum to {total}, expected 1.0"
+    return all_weights
+```
+
+Add `run_all_model_backtests_sector_neutral()` that calls `build_sector_neutral_weights` at each test week for each model. The `sector_map` at each week is built from `sector_history` using `week_date.year`. Saves to `portfolio_sn_returns.parquet` and `portfolio_sn_metrics_table.csv`.
+
+Include a sector-neutral equal-weight benchmark: equal-weight within each sector, then equal-weight across sectors (this is `build_sector_neutral_weights` with a flat `1.0 / len(tickers)` per-sector allocation rather than inverse-vol). Name this `"equal_weight_sn"` in the output.
+
+### `notebooks/06_portfolio.ipynb`
+
+Add a section after the ex-sector section. Show the sector-neutral metrics table, the cumulative return plot, and a breakdown of mean per-sector weight allocation across the test period (a stacked bar chart or table showing that sector weights are approximately equal). The latter confirms the construction is working as intended and can be included as a supplementary figure in the paper.
+
+---
+
+## Anticipated Outcomes
+
+**Primary expectation:** Sharpe ratios will likely compress for all models relative to the full-universe results, because sector-neutral construction removes the beta to high-return sectors. This is expected and should be stated in the paper. The relevant comparison is GNN models vs. the sector-neutral equal-weight benchmark, not vs. the full-universe equal-weight benchmark.
+
+**If GNN outperforms sector-neutral equal-weight:** This is the strongest possible result for the paper. It means the GNN predicts within-sector volatility ranks well enough to generate alpha net of sector effects and transaction costs. The paper can present this as evidence that the GNN captures genuine stock-level signal.
+
+**If GNN and equal-weight perform similarly under sector-neutral construction:** This suggests the GNN's training-period signal is primarily cross-sector (e.g., it learned that tech stocks have different vol dynamics than utilities) rather than within-sector. This is still a publishable finding: it identifies the mechanism of the model's signal and points to within-sector training as a direction for improvement. It also motivates Phase 6's rank-based loss.
+
+**Rank IC interaction:** The sector-neutral construction should be paired with a within-sector Rank IC computation in `notebooks/05_evaluate.ipynb`: compute Spearmanr separately within each sector at each week and report the mean within-sector IC. If the within-sector IC is near zero while the full-universe IC is positive, that confirms the hypothesis above.
+
+---
+
 # Change Log
 
 - v1.0: Original plan (long-short, Rank IC, GNN ensemble, rank-based loss)
 - v1.1: Added Phase 2 (volatility-targeted portfolio) and Phase 3 (minimum variance portfolio); renumbered Rank IC to Phase 4, GNN ensemble to Phase 5, rank-based loss to Phase 6
+- v1.2: Added Phase 7 (ex-sector robustness check) and Phase 8 (sector-neutral portfolio construction)

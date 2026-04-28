@@ -316,9 +316,61 @@ All 96 round 1 checkpoint and val_loss JSON files were deleted so the resumable 
 
 ---
 
+---
+
+## Chapter 12 — GNN Ensemble
+
+### Construction and weights
+
+The ensemble averages predictions from all three GNN variants, weighted by the inverse of each variant's validation MSE. This is a no-training-required combination: the three checkpoint files already existed, so the ensemble is assembled at inference time in `build_gnn_ensemble_preds()` in `src/evaluate.py`. Predictions are saved to `test_preds_gnn_ensemble.parquet` and appended to `ml_metrics_table.csv`.
+
+The resulting weights were: gnn_corr=0.365, gnn_sector=0.315, gnn_granger=0.319. These are nearly equal. The three GNN variants had close validation MSEs, so the inverse-weighting scheme had little leverage. GNN-Correlation received the highest weight because it had the best validation performance, but the margin was small. If the three variants had diverged more on validation, the weighting would have been more consequential.
+
+### ML metrics
+
+The ensemble achieved the lowest test MSE of all seven models: 0.032015. This is a 0.6% improvement over GNN-Correlation (0.032191), a 1.3% improvement over LSTM (0.032424), and a 2.6% improvement over HAR per-stock (0.032858). It is the first model in the project to clearly lead on test MSE rather than clustering with the pack.
+
+Directional accuracy was 0.700, ranking fourth behind GNN-Correlation (0.712), LSTM (0.709), and HAR per-stock (0.707). Averaging the three GNN outputs attenuates the directional sharpness that GNN-Correlation achieves individually. This is expected: the ensemble trades peak DA for lower variance in predictions.
+
+### Rank IC
+
+Mean IC across the 103 test weeks was 0.4162, essentially tied with GNN-Correlation (0.4165). The ensemble's IC t-statistic (36.30) and information ratio (3.58) were both slightly above GNN-Correlation's (34.91, 3.44), indicating marginally more stable week-to-week IC. This consistency benefit comes from GNN-Granger, which had the highest t-stat and IR of any individual model despite the lowest mean IC. Averaging in Granger smoothed the ensemble's IC without depressing the mean. All 103 test weeks were positive-IC, the same as every other model.
+
+The headline conclusion on IC: the ensemble is nearly identical to GNN-Correlation in cross-sectional predictive power. There is no ensemble benefit worth claiming.
+
+### Long-only inverse-volatility portfolio
+
+In the standard inverse-vol construction, the ensemble produced a Sharpe of 0.417, annualized return of 10.35%, and annualized vol of 12.83%. Among GNN variants, GNN-Granger had the highest Sharpe (0.423) and the ensemble ranked second at 0.417. All models trailed equal-weight (Sharpe 0.513, return 12.03%), which captures more market beta with no transaction costs.
+
+The ensemble's standout result was turnover: 0.058 average weekly turnover, the lowest of any model in the study except equal-weight (which has zero turnover by construction). GNN-Correlation, LSTM, and GNN-Granger turned over 0.072-0.082 per week. HAR per-stock was highest at 0.163. The ensemble's predictions are a stable average of three predictions, and this damping cuts rebalancing. Annualized transaction cost drag for the ensemble was the lowest of any active model. In a higher-cost execution environment this advantage would be more meaningful; at 5 bps per side it has limited impact on reported Sharpe.
+
+Across all six metrics (return, vol, Sharpe, drawdown, turnover, max weight), the ensemble had an average rank of 3.50 among the eight strategies, second only to equal-weight at 3.33. This makes it the most consistently good model by the composite ranking, even though it does not top any individual metric.
+
+### Long-short portfolio
+
+All long-short portfolios lost money in the 2024-2025 test period. The ensemble returned -18.46% annualized with Sharpe -1.289 and peak drawdown -39.23%. GNN-Correlation was the worst at -26.44%: its sharper cross-sectional signal correctly identified the high-vol names (NVDA-adjacent stocks, SMCI, TSLA) and shorted them, which was the losing side in the AI rally. The ensemble, by blending in the flatter GNN-Sector and GNN-Granger forecasts, took smaller short positions in those names and therefore lost less. This is a form of diversification rather than signal improvement.
+
+The ensemble did not rescue the long-short construction. The problem diagnosed in Chapter 9 (volatility-based long-short inverts in strong momentum markets) applies regardless of how the GNN predictions are combined.
+
+### Minimum variance portfolio
+
+The minimum variance optimization places predicted RV on the diagonal of the covariance matrix. A wider prediction spread drives more concentrated, differentiated portfolios, which in turn allows the optimizer to exploit the model's cross-sectional ranking more aggressively.
+
+The ensemble's prediction range over the test period was 0.122 to 0.748 annualized. This was the narrowest range of any model: GNN-Correlation spanned 0.093 to 0.864, GNN-Granger spanned 0.136 to 0.864, and HAR per-stock spanned 0.064 to 3.139. Averaging shrinks the tails. As a result, the ensemble's minimum variance portfolio had less diagonal differentiation, and the optimizer produced a less concentrated solution.
+
+The minimum variance Sharpe ranking was: HAR pooled (0.729), HAR per-stock (0.635), GNN-Correlation (0.581), LSTM (0.564), GNN-Ensemble (0.498), GNN-Sector (0.492), GNN-Granger (0.412). The ensemble was fifth of seven. HAR models benefit from wide prediction ranges that drive diagonal concentration, while the ensemble's compressed predictions partially flatten the covariance matrix toward equal-weight. The minimum variance construction is the one context where the ensemble's stabilization of predictions actively costs performance.
+
+### Summary
+
+The ensemble's benefits are measurable but narrow. It achieves the best test MSE, nearly equal Rank IC to GNN-Correlation, and the lowest turnover of any active model. In the long-only portfolio it has the best composite ranking across metrics. Against that, it sacrifices directional accuracy relative to GNN-Correlation, does not improve the long-short outcome, and underperforms individual models in the minimum variance construction due to compressed prediction ranges.
+
+The near-equal ensemble weights (0.365/0.315/0.319) mean the three GNN variants were not differentiated enough on validation for the weighting scheme to act as a meaningful selector. A harder question for future work: would a stacked ensemble (a second-stage model that learns to weight the three GNN outputs conditional on market regime) produce more differentiated weights and a more useful combination?
+
+---
+
 ## Open questions
 
 - Round 2 hparam search is complete. The round 1 winner (lr=3e-4, hidden=128, dropout=0.3, no norm, 3 layers) remains best. No retraining needed unless Phase 6 is pursued.
-- Do the long-short / vol-targeted / min-var portfolio constructions show a GNN advantage that MSE and IC obscure?
-- Phase 5 (GNN ensemble) is still pending. No retraining needed; can be run against existing checkpoints.
-- GraphNorm did not close the gap to no normalization. Phase 6 (rank-based loss, e.g. ListMLE or a Spearman IC surrogate) is the next architectural change to try if portfolio results remain flat.
+- Phase 6 (rank-based loss, e.g. ListMLE or a Spearman IC surrogate) is the next architectural change to try if portfolio results remain flat.
+- GraphNorm did not close the gap to no normalization; Phase 6 would address this at the loss level rather than the normalization level.
+- Significance tests (DM test, block bootstrap for Sharpe) are pending in Phase 5.3.

@@ -406,6 +406,7 @@ def run_all_model_long_short_backtests(
         "GNN-Correlation": "test_preds_gnn_corr.parquet",
         "GNN-Sector":      "test_preds_gnn_sector.parquet",
         "GNN-Granger":     "test_preds_gnn_granger.parquet",
+        "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
         "HAR per-stock":   "test_preds_har.parquet",
         "HAR pooled":      "test_preds_har_pooled.parquet",
         "LSTM":            "test_preds_lstm.parquet",
@@ -467,8 +468,8 @@ def run_all_model_long_short_backtests(
 
     ls_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(ls_returns_df) == 6 * n_test, (
-        f"Expected {6 * n_test} rows, got {len(ls_returns_df)}"
+    assert len(ls_returns_df) == 7 * n_test, (
+        f"Expected {7 * n_test} rows, got {len(ls_returns_df)}"
     )
 
     metrics_table = (
@@ -478,7 +479,7 @@ def run_all_model_long_short_backtests(
           "avg_turnover", "max_long_weight"]]
     )
 
-    assert len(metrics_table) == 6, f"Expected 6 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
 
     ls_returns_df.to_parquet(results_dir / "portfolio_ls_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_ls_metrics_table.csv")
@@ -577,6 +578,7 @@ def run_all_model_backtests(
         "GNN-Correlation": "test_preds_gnn_corr.parquet",
         "GNN-Sector":     "test_preds_gnn_sector.parquet",
         "GNN-Granger":    "test_preds_gnn_granger.parquet",
+        "GNN-Ensemble":   "test_preds_gnn_ensemble.parquet",
     }
 
     # Load predictions for each model; align columns to tickers
@@ -619,8 +621,8 @@ def run_all_model_backtests(
 
     portfolio_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(portfolio_returns_df) == 7 * n_test, (
-        f"Expected {7 * n_test} rows, got {len(portfolio_returns_df)}"
+    assert len(portfolio_returns_df) == 8 * n_test, (
+        f"Expected {8 * n_test} rows, got {len(portfolio_returns_df)}"
     )
 
     metrics_table = (
@@ -630,7 +632,7 @@ def run_all_model_backtests(
           "avg_turnover", "max_single_stock_weight"]]
     )
 
-    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == 8, f"Expected 8 model rows, got {len(metrics_table)}"
 
     portfolio_returns_df.to_parquet(results_dir / "portfolio_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_metrics_table.csv")
@@ -693,6 +695,7 @@ def run_all_model_backtests_vol_target(
         "GNN-Correlation": "test_preds_gnn_corr.parquet",
         "GNN-Sector":      "test_preds_gnn_sector.parquet",
         "GNN-Granger":     "test_preds_gnn_granger.parquet",
+        "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
     }
 
     pred_dfs: dict[str, pd.DataFrame] = {}
@@ -725,8 +728,8 @@ def run_all_model_backtests_vol_target(
 
     vt_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(vt_returns_df) == 6 * n_test, (
-        f"Expected {6 * n_test} rows, got {len(vt_returns_df)}"
+    assert len(vt_returns_df) == 7 * n_test, (
+        f"Expected {7 * n_test} rows, got {len(vt_returns_df)}"
     )
 
     metrics_table = (
@@ -736,7 +739,7 @@ def run_all_model_backtests_vol_target(
           "avg_turnover", "max_single_stock_weight", "avg_equity_weight"]]
     )
 
-    assert len(metrics_table) == 6, f"Expected 6 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
 
     vt_returns_df.to_parquet(results_dir / "portfolio_vt_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_vt_metrics_table.csv")
@@ -898,6 +901,7 @@ def run_all_model_backtests_minvar(
         "GNN-Correlation": "test_preds_gnn_corr.parquet",
         "GNN-Sector":      "test_preds_gnn_sector.parquet",
         "GNN-Granger":     "test_preds_gnn_granger.parquet",
+        "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
     }
 
     print(SEP)
@@ -1001,7 +1005,7 @@ def run_all_model_backtests_minvar(
         pred_arr = pred_df.values.astype(float)
 
         print()
-        print(f"  Model {model_idx+1}/6: {label}")
+        print(f"  Model {model_idx+1}/7: {label}")
         t0_model = time.perf_counter()
 
         rows: list[dict] = []
@@ -1076,8 +1080,8 @@ def run_all_model_backtests_minvar(
 
     mv_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(mv_returns_df) == 6 * n_test, (
-        f"Expected {6 * n_test} rows, got {len(mv_returns_df)}"
+    assert len(mv_returns_df) == 7 * n_test, (
+        f"Expected {7 * n_test} rows, got {len(mv_returns_df)}"
     )
 
     metrics_table = (
@@ -1087,7 +1091,7 @@ def run_all_model_backtests_minvar(
           "avg_turnover", "max_single_stock_weight"]]
     )
 
-    assert len(metrics_table) == 6, f"Expected 6 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
 
     mv_returns_df.to_parquet(results_dir / "portfolio_mv_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_mv_metrics_table.csv")
