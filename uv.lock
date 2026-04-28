@@ -553,6 +553,7 @@ dependencies = [
     { name = "lxml" },
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "osqp" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pmdarima" },
@@ -571,6 +572,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy", specifier = "<2" },
+    { name = "osqp", specifier = ">=1.1.1" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pmdarima", specifier = ">=2.1.1" },
     { name = "pyarrow", specifier = "==14.0.1" },
@@ -1667,6 +1669,32 @@ wheels = [
 ]
 
 [[package]]
+name = "osqp"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "joblib" },
+    { name = "numpy" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/09/fb28f57d6eba067fbb6c941c9136f8d2e41b3d4fd4ddac643cf734210085/osqp-1.1.1.tar.gz", hash = "sha256:1719e6a88f2ec2bd5dab06131331d1433152fb222372832727d9eb5604d7acf4", size = 57059, upload-time = "2026-02-11T18:15:45.329Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/44/b822dde1d329a6dd648adda57c3d13bcf87aa43f6146e864aad53d9a512c/osqp-1.1.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:415096d3cf1710a2200a7e70c0c69591abef9081ce3ef8efb8fe16b14e214726", size = 318023, upload-time = "2026-02-11T18:07:14.461Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/0c/0c74eef9271f06bd76fc462f747574a53642aef77819512a2ae57cdff0a8/osqp-1.1.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:b3f26a5deb848e577d3b8b03c129be141756f3675297c38c128d556ab6216fb8", size = 300954, upload-time = "2026-02-11T18:07:15.8Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/fa/1fbc642665916e0e79804802dd869a9974c51feaad29f48415c9dae838a9/osqp-1.1.1-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9974235f05905317cd01cf6c6e526fa97f9097812c2c5c3e4dc479c07cdf9d55", size = 320177, upload-time = "2026-02-11T18:07:17.341Z" },
+    { url = "https://files.pythonhosted.org/packages/40/e8/0c501eb2a1d7fd35beda8bebfe2283a159e2733254fd17dd691d21d8c3ca/osqp-1.1.1-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f7328e138fe8c2f40a8235d1f47593a0437bc48e29aad5c14ab7b3dafa6baf17", size = 341459, upload-time = "2026-02-11T18:07:18.958Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/7d/3a51e378bdb91691e34fc8ea24c7b6e80f413882ace21963e95d6fe6be91/osqp-1.1.1-cp310-cp310-win_amd64.whl", hash = "sha256:de3aaa7b3db1c61c288d710be5b190894d0475d3fdb13969a6fe823f6c0c5634", size = 309378, upload-time = "2026-02-11T18:07:20.161Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/7e/b821d6819cbae6c7a0d76b5db23836c8b3b6db7684332414a1ff9cf737eb/osqp-1.1.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:48a6f62df0ec55a5a3a445e4143f51a813931f1e48ac006b15b7e5c9899e2937", size = 319461, upload-time = "2026-02-11T18:07:22.32Z" },
+    { url = "https://files.pythonhosted.org/packages/81/ac/1d5361ddfad9e23ca56a0c580024ca1c99535f11b16d94b3d4c9fbc543af/osqp-1.1.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:0e569d36955e1a69129f391bb27b2240b3b69d0bcff28e5d19446013dda59836", size = 301952, upload-time = "2026-02-11T18:07:23.542Z" },
+    { url = "https://files.pythonhosted.org/packages/83/93/5c245d507d061a1532cc2bf0ad8ad907b464851b31f36d8316771a5b3c84/osqp-1.1.1-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9fd6d87d5aa17161c43b95e44ab53c76cef466b851cc4ed32da658596cb0a0a1", size = 321822, upload-time = "2026-02-11T18:07:24.78Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/f7/351c42d12b2632d1512ec6e67f42c1367599f0b224d0621c94e9c76d06ab/osqp-1.1.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2a0481c1f19f70eea9e9883b176eb37b64cd52525920c9ed765acb02411998ae", size = 343182, upload-time = "2026-02-11T18:07:26.165Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/d9/ebf4d06bb13ecad4edcb2c6b491c47a798b58b9b5e71ba315e01a8696e2d/osqp-1.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:d7524d22e91a8381ed30eecbfdf82935528f84b3d8a1b5ad1f8dd84dff3fc07e", size = 310097, upload-time = "2026-02-11T18:07:27.683Z" },
+]
+
+[[package]]
 name = "overrides"
 version = "7.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2548,10 +2576,10 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp310-cp310-linux_x86_64.whl", hash = "sha256:9a5f0b103cfe840b3568416aa5067f6e7b9fec67d9c5659fd43b1207450fe975" },
-    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp310-cp310-win_amd64.whl", hash = "sha256:fe3bf682e86c08d6a8ec0ee30811732487fa688fc556d6e8f92d853d85507c0d" },
-    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp311-cp311-linux_x86_64.whl", hash = "sha256:914d128e5abcbbe79ca1b9eb5311b185444f1b2d7117df555fe418487ecfb894" },
-    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp311-cp311-win_amd64.whl", hash = "sha256:bc1e21d7412a2f06f552a9afb92c56c8b23d174884e9383259c3cf5db4687c98" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp310-cp310-linux_x86_64.whl", hash = "sha256:9a5f0b103cfe840b3568416aa5067f6e7b9fec67d9c5659fd43b1207450fe975", upload-time = "2024-09-06T21:41:24Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp310-cp310-win_amd64.whl", hash = "sha256:fe3bf682e86c08d6a8ec0ee30811732487fa688fc556d6e8f92d853d85507c0d", upload-time = "2024-09-06T21:42:06Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp311-cp311-linux_x86_64.whl", hash = "sha256:914d128e5abcbbe79ca1b9eb5311b185444f1b2d7117df555fe418487ecfb894", upload-time = "2024-09-06T21:43:48Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torch-2.4.1%2Bcu121-cp311-cp311-win_amd64.whl", hash = "sha256:bc1e21d7412a2f06f552a9afb92c56c8b23d174884e9383259c3cf5db4687c98", upload-time = "2024-09-06T21:44:21Z" },
 ]
 
 [[package]]
@@ -2584,10 +2612,10 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp310-cp310-linux_x86_64.whl", hash = "sha256:b8cc4bf381b75522995b601e07a1b433b5fd925dc3e34a7fa6cd22f449d65379" },
-    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp310-cp310-win_amd64.whl", hash = "sha256:e530c6bbb72f587f0e94740758f005c99e6de871ed9d10afffd8f18bd41e5df0" },
-    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp311-cp311-linux_x86_64.whl", hash = "sha256:536417340694b29cc54c308507d098b00cbdcc1fe868072a34b553bed73d9d30" },
-    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp311-cp311-win_amd64.whl", hash = "sha256:952dedd29ddd6010b7bda16a5e58e55eb051a46db941cc676bb880918c694ed8" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp310-cp310-linux_x86_64.whl", hash = "sha256:b8cc4bf381b75522995b601e07a1b433b5fd925dc3e34a7fa6cd22f449d65379", upload-time = "2024-09-06T21:53:00Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp310-cp310-win_amd64.whl", hash = "sha256:e530c6bbb72f587f0e94740758f005c99e6de871ed9d10afffd8f18bd41e5df0", upload-time = "2024-09-06T21:53:00Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp311-cp311-linux_x86_64.whl", hash = "sha256:536417340694b29cc54c308507d098b00cbdcc1fe868072a34b553bed73d9d30", upload-time = "2024-09-06T21:53:00Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu121/torchvision-0.19.1%2Bcu121-cp311-cp311-win_amd64.whl", hash = "sha256:952dedd29ddd6010b7bda16a5e58e55eb051a46db941cc676bb880918c694ed8", upload-time = "2024-09-06T21:53:01Z" },
 ]
 
 [[package]]

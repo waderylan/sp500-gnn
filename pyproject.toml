@@ -17,6 +17,7 @@ dependencies = [
     "torch==2.4.1+cu121",
     "torchvision==0.19.1+cu121",
     "torch-geometric>=2.7.0",
+    "osqp>=1.1.1",
 ]
 
 [[tool.uv.index]]

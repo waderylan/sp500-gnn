@@ -9,7 +9,8 @@
       "Bash(python -c ' *)",
       "Bash(python *)",
       "Bash(.venv/Scripts/python -c ' *)",
-      "Bash(.venv/Scripts/python.exe -c ' *)"
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(uv run *)"
     ]
   }
 }

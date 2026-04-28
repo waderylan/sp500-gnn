@@ -26,6 +26,8 @@ MAX_FEATURE_NAN_FRAC = 0.05  # maximum allowed NaN fraction in the feature tenso
 # Portfolio construction
 MAX_WEIGHT           = 0.05          # maximum single-stock weight after normalization
 TRANSACTION_COST_BPS = 10            # one-way cost in basis points
+LONG_SHORT_QUANTILE  = 0.25          # fraction of stocks in each leg of the long-short portfolio
+VOL_TARGET           = 0.10          # annualized target portfolio volatility for vol-targeted construction (10%)
 
 # Graph construction — correlation
 CORR_THRESHOLD    = 0.3             # edge threshold θ — set to ablation winner (see corr_threshold_ablation.json)
