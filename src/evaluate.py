@@ -1,21 +1,56 @@
 """
-Evaluation metrics: MSE, MAE, R², Rank IC, and sector-level breakdowns.
+Evaluation metrics: MSE, MAE, R², Rank IC, ICIR, top-k hit rate,
+pairwise accuracy, and sector-level breakdowns.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, t as t_dist
 
 import config
 
 if TYPE_CHECKING:
     import torch
+
+
+@dataclass
+class RankingEvalResult:
+    """
+    Bundled ranking evaluation metrics for one model over the test period.
+
+    ic_series:          Spearman IC per week (NaN for sparse weeks).
+    mean_ic:            Mean IC across non-NaN weeks.
+    ic_std:             Standard deviation of IC.
+    icir:               Information ratio: mean_ic / ic_std.
+    ic_tstat:           t-statistic for H0: mean IC = 0.
+    ic_pvalue:          Two-sided p-value for the IC t-test.
+    n_weeks:            Number of non-NaN weeks used.
+    pct_positive_ic:    Fraction of non-NaN weeks where IC > 0.
+    hit_rate_series:    Top-k hit rate per week (NaN for sparse weeks).
+    mean_hit_rate:      Mean hit rate across non-NaN weeks.
+    pairwise_acc_series: Pairwise ordering accuracy per week (NaN for sparse weeks).
+    mean_pairwise_acc:  Mean pairwise accuracy across non-NaN weeks.
+    """
+    model_name: str
+    ic_series: pd.Series
+    mean_ic: float
+    ic_std: float
+    icir: float
+    ic_tstat: float
+    ic_pvalue: float
+    n_weeks: int
+    pct_positive_ic: float
+    hit_rate_series: pd.Series
+    mean_hit_rate: float
+    pairwise_acc_series: pd.Series
+    mean_pairwise_acc: float
 
 
 def _load_gnn_model(
@@ -180,10 +215,12 @@ def summarize_rank_ic(ic_series: pd.Series) -> dict[str, float]:
 
     ic_series: pd.Series of Spearman IC values (NaN weeks are dropped).
     Returns dict with keys:
-        mean_ic:   mean IC across weeks.
-        ic_tstat:  t-statistic testing H0: mean IC = 0 (= mean / (std / sqrt(n))).
-        ic_ir:     information ratio (= mean / std).
-        n_weeks:   number of non-NaN weeks used.
+        mean_ic:      mean IC across weeks.
+        ic_std:       standard deviation of IC.
+        ic_tstat:     t-statistic testing H0: mean IC = 0 (= mean / (std / sqrt(n))).
+        ic_pvalue:    two-sided p-value for the IC t-test (t distribution, df=n-1).
+        ic_ir:        information ratio (= mean / std), also called ICIR.
+        n_weeks:      number of non-NaN weeks used.
         pct_positive: fraction of IC values > 0.
 
     Shape assertion: none (operates on a 1D series).
@@ -191,20 +228,205 @@ def summarize_rank_ic(ic_series: pd.Series) -> dict[str, float]:
     clean = ic_series.dropna()
     n = len(clean)
     if n == 0:
-        return {"mean_ic": float("nan"), "ic_tstat": float("nan"),
-                "ic_ir": float("nan"), "n_weeks": 0, "pct_positive": float("nan")}
-    mean_ic = float(clean.mean())
-    std_ic  = float(clean.std(ddof=1))
-    ic_tstat    = mean_ic / (std_ic / np.sqrt(n)) if std_ic > 0 else float("nan")
-    ic_ir       = mean_ic / std_ic if std_ic > 0 else float("nan")
+        return {
+            "mean_ic": float("nan"), "ic_std": float("nan"),
+            "ic_tstat": float("nan"), "ic_pvalue": float("nan"),
+            "ic_ir": float("nan"), "n_weeks": 0, "pct_positive": float("nan"),
+        }
+    mean_ic  = float(clean.mean())
+    std_ic   = float(clean.std(ddof=1))
+    ic_tstat = mean_ic / (std_ic / np.sqrt(n)) if std_ic > 0 else float("nan")
+    ic_pvalue = (
+        float(2 * t_dist.sf(abs(ic_tstat), df=n - 1))
+        if std_ic > 0 else float("nan")
+    )
+    ic_ir        = mean_ic / std_ic if std_ic > 0 else float("nan")
     pct_positive = float((clean > 0).mean())
     return {
         "mean_ic":     mean_ic,
+        "ic_std":      std_ic,
         "ic_tstat":    ic_tstat,
+        "ic_pvalue":   ic_pvalue,
         "ic_ir":       ic_ir,
         "n_weeks":     n,
         "pct_positive": pct_positive,
     }
+
+
+def compute_top_k_hit_rate(
+    preds: pd.DataFrame,
+    actuals: pd.DataFrame,
+    q: float = config.TOP_K_HIT_RATE_Q,
+    min_valid: int = 10,
+) -> pd.Series:
+    """
+    Compute the top-k hit rate at each week.
+
+    At each week, the top-k stocks by predicted RV and the top-k stocks by actual RV
+    are identified (k = int(n_valid * q)). Hit rate = |intersection| / k.
+
+    A hit rate of 1.0 means the model perfectly identified all top-k high-vol stocks.
+    Random baseline hit rate = q (e.g., 0.25 for the top quartile).
+
+    preds:     DataFrame of shape (num_weeks, num_stocks), predicted RV at row T.
+    actuals:   DataFrame of same shape, actual RV for week T+1 at row T.
+    q:         top fraction to evaluate (config.TOP_K_HIT_RATE_Q).
+    min_valid: minimum valid stocks per week; weeks with fewer produce NaN.
+
+    Returns pd.Series indexed by week, values in [0, 1], NaN for sparse weeks.
+
+    Shape assertion: preds.shape == actuals.shape.
+    Lookahead safety: operates on pre-aligned DataFrames with no date windowing.
+    """
+    assert preds.shape == actuals.shape, (
+        f"Shape mismatch: preds {preds.shape} vs actuals {actuals.shape}"
+    )
+    shared_index = preds.index.intersection(actuals.index)
+    hit_rates: list[float] = []
+
+    for week in shared_index:
+        p = preds.loc[week]
+        a = actuals.loc[week]
+        valid = p.notna() & a.notna()
+        n_valid = valid.sum()
+        if n_valid < min_valid:
+            hit_rates.append(float("nan"))
+            continue
+        k = max(1, int(n_valid * q))
+        top_pred   = set(p[valid].nlargest(k).index)
+        top_actual = set(a[valid].nlargest(k).index)
+        hit_rates.append(len(top_pred & top_actual) / k)
+
+    result = pd.Series(hit_rates, index=shared_index, name="hit_rate")
+    assert len(result) == len(shared_index), (
+        f"Hit rate series length {len(result)} != index length {len(shared_index)}"
+    )
+    return result
+
+
+def compute_pairwise_accuracy(
+    preds: pd.DataFrame,
+    actuals: pd.DataFrame,
+    sample_frac: float = config.PAIRWISE_ACC_SAMPLE_FRAC,
+    seed: int = config.RANDOM_SEED,
+    min_valid: int = 10,
+) -> pd.Series:
+    """
+    Compute pairwise ordering accuracy at each week.
+
+    For a random sample of (i, j) pairs where actual_i != actual_j, computes the
+    fraction where sign(pred_i - pred_j) == sign(actual_i - actual_j).
+
+    This is the evaluation counterpart to compute_rank_loss: a model that minimizes
+    rank loss should maximize pairwise accuracy. Random baseline = 0.5.
+
+    preds:       DataFrame of shape (num_weeks, num_stocks), predicted RV at row T.
+    actuals:     DataFrame of same shape, actual RV for week T+1 at row T.
+    sample_frac: fraction of N*(N-1)/2 pairs sampled per week.
+    seed:        NumPy RNG seed for reproducible sampling.
+    min_valid:   minimum valid stocks per week; weeks with fewer produce NaN.
+
+    Returns pd.Series indexed by week, values in [0, 1], NaN for sparse weeks.
+
+    Shape assertion: preds.shape == actuals.shape.
+    Lookahead safety: operates on pre-aligned DataFrames with no date windowing.
+    """
+    assert preds.shape == actuals.shape, (
+        f"Shape mismatch: preds {preds.shape} vs actuals {actuals.shape}"
+    )
+    rng = np.random.default_rng(seed)
+    shared_index = preds.index.intersection(actuals.index)
+    accuracies: list[float] = []
+
+    for week in shared_index:
+        p = preds.loc[week]
+        a = actuals.loc[week]
+        valid = p.notna() & a.notna()
+        n_valid = valid.sum()
+        if n_valid < min_valid:
+            accuracies.append(float("nan"))
+            continue
+
+        pv = p[valid].values.astype(float)
+        av = a[valid].values.astype(float)
+        n_pairs = max(1, int(n_valid * (n_valid - 1) / 2 * sample_frac))
+
+        idx_i = rng.integers(0, n_valid, size=n_pairs)
+        idx_j = rng.integers(0, n_valid, size=n_pairs)
+
+        keep = idx_i != idx_j
+        idx_i = idx_i[keep]
+        idx_j = idx_j[keep]
+        if len(idx_i) == 0:
+            accuracies.append(float("nan"))
+            continue
+
+        diff_a = av[idx_i] - av[idx_j]
+        not_tied = np.abs(diff_a) >= 1e-8
+        idx_i = idx_i[not_tied]
+        idx_j = idx_j[not_tied]
+        diff_a = diff_a[not_tied]
+        if len(idx_i) == 0:
+            accuracies.append(float("nan"))
+            continue
+
+        diff_p = pv[idx_i] - pv[idx_j]
+        correct = np.sign(diff_p) == np.sign(diff_a)
+        accuracies.append(float(correct.mean()))
+
+    result = pd.Series(accuracies, index=shared_index, name="pairwise_acc")
+    assert len(result) == len(shared_index), (
+        f"Pairwise acc series length {len(result)} != index length {len(shared_index)}"
+    )
+    return result
+
+
+def compute_all_ranking_metrics(
+    preds: pd.DataFrame,
+    actuals: pd.DataFrame,
+    model_name: str,
+    q: float = config.TOP_K_HIT_RATE_Q,
+    sample_frac: float = config.PAIRWISE_ACC_SAMPLE_FRAC,
+    seed: int = config.RANDOM_SEED,
+) -> RankingEvalResult:
+    """
+    Compute all ranking evaluation metrics for one model over the test period.
+
+    Calls compute_rank_ic, compute_top_k_hit_rate, and compute_pairwise_accuracy,
+    then assembles results into a RankingEvalResult dataclass.
+
+    preds:       DataFrame of shape (num_weeks, num_stocks), predicted RV at row T.
+    actuals:     DataFrame of same shape, actual RV for week T+1 at row T.
+    model_name:  Label used in tables and plots.
+    q:           Top fraction for hit rate (config.TOP_K_HIT_RATE_Q).
+    sample_frac: Pair sampling fraction for pairwise accuracy.
+    seed:        RNG seed for reproducible pairwise sampling.
+
+    Returns RankingEvalResult with all metric series and summaries populated.
+
+    Shape assertion: preds.shape == actuals.shape (delegated to sub-functions).
+    Lookahead safety: delegates entirely to sub-functions; no additional date windowing.
+    """
+    ic_series        = compute_rank_ic(preds, actuals)
+    ic_summary       = summarize_rank_ic(ic_series)
+    hit_rate_series  = compute_top_k_hit_rate(preds, actuals, q=q)
+    pairwise_series  = compute_pairwise_accuracy(preds, actuals, sample_frac=sample_frac, seed=seed)
+
+    return RankingEvalResult(
+        model_name=model_name,
+        ic_series=ic_series,
+        mean_ic=ic_summary["mean_ic"],
+        ic_std=ic_summary["ic_std"],
+        icir=ic_summary["ic_ir"],
+        ic_tstat=ic_summary["ic_tstat"],
+        ic_pvalue=ic_summary["ic_pvalue"],
+        n_weeks=ic_summary["n_weeks"],
+        pct_positive_ic=ic_summary["pct_positive"],
+        hit_rate_series=hit_rate_series,
+        mean_hit_rate=float(hit_rate_series.dropna().mean()),
+        pairwise_acc_series=pairwise_series,
+        mean_pairwise_acc=float(pairwise_series.dropna().mean()),
+    )
 
 
 def compile_validation_summary(

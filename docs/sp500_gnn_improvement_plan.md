@@ -1,6 +1,6 @@
 # Implementation Plan — Improving Portfolio Results
 
-Version 1.2 · Focus: Extracting Existing Signal Before Model Changes
+Version 1.3 · Focus: Extracting Existing Signal Before Model Changes
 
 ---
 
@@ -27,9 +27,10 @@ The following tasks must be completed in sequence:
 - [x] 3. Minimum variance portfolio  
 - [x] 4. Rank IC evaluation metric  
 - [x] 5. GNN ensemble (prediction averaging)  
-- [ ] 6. (Optional, next phase) Rank-based training loss  
-- [ ] 7. Ex-sector robustness check (IT + Communication Services exclusion)  
-- [ ] 8. Sector-neutral portfolio construction  
+- [x] 6. Rank-based training loss  
+- [ ] 7. Mixed rank-MSE loss  
+- [ ] 8. Ex-sector robustness check (IT + Communication Services exclusion)  
+- [ ] 9. Sector-neutral portfolio construction  
 
 No model retraining should occur before Tasks 1–5 are completed and analyzed.
 
@@ -263,6 +264,89 @@ def rank_loss(preds, targets):
     targets_rank = torch.argsort(torch.argsort(targets))
     return torch.mean((preds_rank.float() - targets_rank.float())**2)
 ```
+
+---
+
+# Phase 7 — Mixed Rank-MSE Loss
+
+## Goal
+
+Pure rank loss (Phase 6) improved Rank IC, ICIR, and top-k hit rate across all three graph types, but broke prediction calibration: val MSE degraded 6-10x relative to MSE-trained models, and predictions lost their absolute scale. This makes rank loss models unsuitable for inverse-volatility or minimum variance portfolio constructions, which require predictions in the correct RV range.
+
+Pure MSE preserves calibration but produces weaker ICIR (3.4-3.7 vs. 3.9-4.3 under rank loss), meaning the cross-sectional signal is noisier week to week.
+
+A mixed loss combines both objectives: the MSE term keeps predictions on the correct absolute scale, and the rank loss term pushes the model to prioritize cross-sectional ordering. A single scalar weight controls the tradeoff.
+
+---
+
+## Construction
+
+At each training step:
+
+```
+loss = (1 - α) * MSE + α * BPR_rank_loss
+```
+
+Where:
+- `α = config.MIXED_LOSS_RANK_WEIGHT` (value in [0, 1])
+- MSE is the standard masked mean squared error over non-NaN targets
+- BPR rank loss is `compute_rank_loss()` from Phase 6 with the same 10% pair sampling
+
+At `α = 0` the loss is pure MSE (reproduces Phase 5 models). At `α = 1` it is pure rank loss (reproduces Phase 6 models). The goal is to find the smallest `α` that recovers the ICIR gains from Phase 6 while keeping val MSE within a reasonable range of the pure MSE models.
+
+A sweep over `α ∈ {0.1, 0.3, 0.5, 0.7, 0.9}` is run on GNN-Correlation only. The winning `α` is then used to train all three graph types.
+
+The key diagnostic is the ICIR vs. val MSE tradeoff curve as `α` increases. If ICIR plateaus at `α = 0.3` while val MSE is still acceptable, there is no reason to go higher. The paper reports the result at the winning `α` alongside the pure MSE and pure rank loss results as a three-way comparison.
+
+---
+
+## Implementation
+
+### `config.py`
+
+Add:
+
+```python
+MIXED_LOSS_RANK_WEIGHT     = 0.5    # default α for mixed loss training
+MIXED_LOSS_ALPHA_SWEEP     = [0.1, 0.3, 0.5, 0.7, 0.9]  # values tested in sweep
+```
+
+### `src/train.py`
+
+Add:
+
+```python
+def compute_mixed_loss(
+    preds: torch.Tensor,
+    targets: torch.Tensor,
+    rank_weight: float = config.MIXED_LOSS_RANK_WEIGHT,
+) -> torch.Tensor:
+    """
+    Weighted combination of masked MSE and pairwise BPR rank loss.
+
+    rank_weight=0.0 reduces to masked MSE.
+    rank_weight=1.0 reduces to compute_rank_loss.
+    """
+    mse  = _masked_mse(preds, targets)
+    rank = compute_rank_loss(preds, targets)
+    return (1.0 - rank_weight) * mse + rank_weight * rank
+```
+
+Add `train_gnn_corr_mixed_sweep()` that iterates over `config.MIXED_LOSS_ALPHA_SWEEP`, trains one GNN-Correlation model per value using `loss_fn=lambda p, t: compute_mixed_loss(p, t, alpha)`, and records val MSE and val IC for each. Results saved to `DATA_RESULTS_DIR/mixed_loss_alpha_sweep.json`.
+
+Add `train_gnn_corr_mixed()`, `train_gnn_sector_mixed()`, and `train_gnn_granger_mixed()` wrapper functions that call `train_gnn()` with `loss_fn=compute_mixed_loss` using the winning `α`. Checkpoints use `_mixed` suffix. Predictions saved as `test_preds_gnn_{variant}_mixed.parquet`.
+
+### `notebooks/04c_rank_loss_models.ipynb`
+
+Add a new section after the rank loss models. Run the alpha sweep on GNN-Correlation, plot the ICIR vs. val MSE tradeoff curve across `α` values, and select the winner. Train all three graph types with the winning `α`. Add to the ranking metrics summary table alongside the MSE and pure rank loss results so all three families are compared in one place.
+
+---
+
+## Anticipated Outcomes
+
+The mixed loss should recover most of the ICIR improvement from pure rank loss at values of `α` between 0.3 and 0.5, while keeping val MSE within 2-3x of the pure MSE models (compared to 6-10x for pure rank loss). The hit rate and mean IC improvements should partially persist. Predictions should remain calibrated enough for inverse-vol and min-var portfolio constructions.
+
+If the ICIR gain requires `α > 0.7` before it appears, the signal from the rank loss component is fragile and the paper will report this as a null result on mixed training. If ICIR converges at `α = 0.3`, that is the cleanest result: a small rank loss weight provides measurable consistency gains at minimal calibration cost.
 
 ---
 

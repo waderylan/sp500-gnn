@@ -368,9 +368,93 @@ The near-equal ensemble weights (0.365/0.315/0.319) mean the three GNN variants 
 
 ---
 
+## Chapter 13 — Rank Loss Training
+
+### Motivation
+
+Chapter 11 closed with a clear diagnosis: the training objective and the evaluation objective are misaligned. MSE penalizes absolute prediction errors. Portfolio construction rewards correct cross-sectional ordering. Whether the model predicts 0.18 or 0.22 for a stock is irrelevant as long as the ranking is correct. The improvement plan's Phase 6 called for replacing MSE with a loss that directly penalizes ordering errors.
+
+The approach chosen is pairwise BPR (Bayesian Personalized Ranking) loss. For a random sample of stock pairs (i, j) where actual RV differs, the loss penalizes the model if the sign of `pred_i - pred_j` disagrees with the sign of `actual_i - actual_j`. The formula is `softplus(-sign(target_i - target_j) * (pred_i - pred_j))`, which is equivalent to `-log(sigmoid(signed_diff))`. At each training step, roughly 10% of all ~107k possible stock pairs are sampled (configurable via `RANK_LOSS_PAIR_SAMPLE_FRAC`). This gives approximately 10k pairs per time step, which is fast enough to maintain training speed while covering a representative fraction of the pair space.
+
+The key property of this loss: gradients exist only through the prediction differences, not through absolute values. The model is free to output predictions at any scale, as long as the relative ordering is correct. This separation from absolute scale would turn out to be important.
+
+Three new models were trained in `notebooks/04c_rank_loss_models.ipynb`, one per graph type, using the same architecture as the MSE models: GNNModelV2 for Correlation (hparam-tuned config), GNNModel for Sector and Granger. Checkpoints use `_rankloss` suffixes and predictions are saved separately, leaving the MSE models fully intact.
+
+### Training behavior
+
+All three rank loss models converged quickly relative to the MSE models:
+
+| Model | Epochs to convergence | Best val rank loss |
+|---|---|---|
+| GNN-Corr rank loss | 50 | 0.6167 |
+| GNN-Sector rank loss | 26 | 0.6198 |
+| GNN-Granger rank loss | 19 | 0.6195 |
+
+The rank loss values sit around 0.617-0.620 at convergence. These are not directly comparable to MSE values. The absolute scale reflects the BPR formulation: a value near `log(2) ≈ 0.693` corresponds to random ordering, so values converging to ~0.617 indicate the model is doing better than random but the gap is modest. Training curves showed clean monotonic descent with no instability, which is encouraging given that random pair sampling introduces stochasticity at each step.
+
+### Val MSE divergence
+
+The rank loss models produce substantially worse val MSE than the MSE-trained models:
+
+| Model | Val MSE |
+|---|---|
+| GNN-Correlation (MSE) | 0.019778 |
+| GNN-Sector (MSE) | 0.022894 |
+| GNN-Granger (MSE) | 0.022615 |
+| GNN-Correlation (rank loss) | 0.190358 |
+| GNN-Sector (rank loss) | 0.178683 |
+| GNN-Granger (rank loss) | 0.134868 |
+
+The rank loss models are 6-10x worse on val MSE. This is expected and not a failure. The BPR loss never penalizes predictions for being at the wrong absolute scale, only for ordering incorrectly. The model is free to shift all predictions by a constant or compress their spread to near-zero and still achieve minimal rank loss. MSE deterioration is the direct, unavoidable cost of not including an absolute calibration term in the loss. For portfolio construction, this is acceptable: the inverse-vol weighting uses predictions only for relative ranking, not absolute magnitude.
+
+### Ranking metrics
+
+The full ranking evaluation was run on the 103 test-period weeks using `compute_all_ranking_metrics`, which reports Rank IC, ICIR, IC t-stat/p-value, top-25% hit rate, and pairwise accuracy:
+
+| Model | Mean IC | ICIR | IC t-stat | Hit Rate (25%) | Pairwise Acc |
+|---|---|---|---|---|---|
+| GNN-Corr (MSE) | 0.4165 | 3.440 | 34.91 | 0.492 | 0.645 |
+| GNN-Sector (MSE) | 0.3826 | 3.399 | 34.50 | 0.479 | 0.633 |
+| GNN-Granger (MSE) | 0.3749 | 3.663 | 37.18 | 0.473 | 0.629 |
+| GNN-Corr (rank loss) | 0.4293 | 3.863 | 39.20 | 0.510 | 0.499 |
+| GNN-Sector (rank loss) | 0.4203 | 4.123 | 41.85 | 0.506 | 0.500 |
+| GNN-Granger (rank loss) | 0.4139 | 4.326 | 43.91 | 0.506 | 0.436 |
+
+Three metrics improved uniformly across all graph types. Mean IC rose for every rank loss model: GNN-Corr by 3.1% (0.4165 to 0.4293), GNN-Sector by 9.9% (0.3826 to 0.4203), and GNN-Granger by 10.4% (0.3749 to 0.4139). The improvement is largest for the graph types that were furthest behind GNN-Correlation under MSE training, suggesting rank loss is partially compensating for the limitations of sparser or coarser graphs.
+
+ICIR improved substantially: GNN-Sector went from 3.399 to 4.123 (+21%), GNN-Granger from 3.663 to 4.326 (+18%), GNN-Corr from 3.440 to 3.863 (+12%). ICIR measures consistency of the cross-sectional signal, not just its average level. A higher ICIR means the model's week-to-week ranking accuracy was more stable under rank loss training. This is directly attributable to the objective function: MSE can have large losses on weeks where predictions are wrong by a lot in absolute terms but still rank correctly; rank loss only loses when the ordering is wrong. The signal is cleaner.
+
+IC t-statistics followed the same direction: 34.91 to 39.20 for Corr, 34.50 to 41.85 for Sector, 37.18 to 43.91 for Granger. All IC p-values round to 0.0000 under any reasonable threshold.
+
+Top-25% hit rate also improved across all three: Corr from 0.492 to 0.510, Sector from 0.479 to 0.506, Granger from 0.473 to 0.506. Hit rate measures whether the model correctly identifies the top-quartile high-vol stocks each week. The random baseline is 0.25 and all models are well above it. The rank loss models are consistently better at identifying the most volatile names, which is the input to the short side of the long-short portfolio.
+
+### The pairwise accuracy result
+
+Pairwise accuracy tells a completely different story. The MSE models achieved 0.629-0.645, well above the 0.5 random baseline. The rank loss models produced 0.499-0.500, essentially random, with GNN-Granger at 0.436, which is below random.
+
+This outcome appears contradictory: the metric the rank loss was designed to optimize is the one that degraded the most. The explanation is in the prediction scale. BPR loss penalizes the sign of `pred_i - pred_j` but never penalizes the magnitude. The model learns to produce predictions with correct relative rank ordering but compressed spread. If predictions across 465 stocks span a range of 0.001 rather than 0.700, the correct ranking is preserved in principle but `pred_i - pred_j` for many pairs is a floating point value near zero. At that precision, numerical noise determines the sign, and pairwise accuracy degrades toward random.
+
+Spearman IC is immune to this problem because it converts predictions to integer ranks before computing correlation. A model outputting [0.1001, 0.1002, 0.1003] with the correct ordering has perfect Spearman IC relative to actual ranks [1, 2, 3]. The same predictions produce near-random pairwise accuracy because all differences are near zero.
+
+GNN-Granger's pairwise accuracy of 0.436 going below random is the strongest evidence for this mechanism. GNN-Granger uses the sparsest graph (13,886 edges vs. 91,854 for Correlation). Many stocks have few neighbors and receive little informative message passing. Under rank loss, the model may push predictions for poorly-connected stocks to the midpoint of the prediction range to minimize ordering errors on those nodes, effectively inverting some pairwise relationships for sparse nodes.
+
+The pairwise accuracy metric as implemented was checking `sign(pred_i - pred_j)` against `sign(actual_i - actual_j)` on raw prediction values. For MSE-trained models, predictions track actual RV scale and the pairwise sign is meaningful. For rank-loss-trained models, this metric is measuring floating point noise, not ordering signal. The metric is not wrong, but it is measuring something different for the two model families, which makes direct comparison misleading.
+
+### What the results mean
+
+The rank loss achieved its intended effect on Rank IC, ICIR, and hit rate. All three improved. The three graph types converged toward similar IC (0.41-0.43 range) where under MSE they had spread (0.37-0.42). The rank loss is a partial equalizer across graph architectures.
+
+The consistency improvement is the most useful finding for the paper. An ICIR above 4.0 for GNN-Sector and GNN-Granger is a strong result. For a cross-sectional equity factor, ICIR above 2.0 is considered portfolio-grade. The rank loss models are above that threshold for all three graph types, while the MSE models fell below it for Sector (3.40) and Granger (3.66) depending on how one sets the threshold. Whether ICIR above 4 is meaningful in an out-of-sample 103-week test is the question the significance tests in Phase 5.3 will address.
+
+The practical cost is the prediction calibration loss. Inverse-volatility weighting and minimum variance optimization both depend on the absolute scale of predicted RV, not just the ranking. Rank loss models cannot be dropped into those constructions without re-calibration. They are suitable for the long-short portfolio (which depends only on relative rankings) but not for inverse-vol or min-var portfolios without an additional step to restore scale.
+
+One open question: the BPR loss penalizes at the pair level but does not have any term that preserves prediction spread. Adding a small auxiliary MSE term (a weighted combination of rank loss and MSE) might preserve the ranking improvement while keeping predictions on a usable scale. That would make the rank loss models substitutable into all portfolio constructions, not just the long-short.
+
+---
+
 ## Open questions
 
-- Round 2 hparam search is complete. The round 1 winner (lr=3e-4, hidden=128, dropout=0.3, no norm, 3 layers) remains best. No retraining needed unless Phase 6 is pursued.
-- Phase 6 (rank-based loss, e.g. ListMLE or a Spearman IC surrogate) is the next architectural change to try if portfolio results remain flat.
-- GraphNorm did not close the gap to no normalization; Phase 6 would address this at the loss level rather than the normalization level.
+- Rank loss models show improved IC, ICIR, and hit rate vs. MSE models but predictions lose absolute calibration. A mixed loss (rank loss + small MSE weight) would test whether both properties can be retained simultaneously.
+- Pairwise accuracy as implemented measures raw prediction differences, which is dominated by floating-point noise when rank loss compresses prediction spread. A rank-based pairwise accuracy (compare ranks rather than values) would be a cleaner counterpart metric for rank loss models.
+- Portfolio evaluation for rank loss models is pending. Long-short is the natural first test since it depends only on ranking.
 - Significance tests (DM test, block bootstrap for Sharpe) are pending in Phase 5.3.

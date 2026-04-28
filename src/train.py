@@ -33,6 +33,72 @@ def set_seeds() -> None:
     torch.cuda.manual_seed_all(config.RANDOM_SEED)
 
 
+def _masked_mse(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """
+    MSE loss with NaN masking. Default loss_fn for train_gnn.
+
+    preds:   shape (num_stocks,), model output for one time step.
+    targets: shape (num_stocks,), may contain NaN.
+    Returns scalar loss over valid (non-NaN) stocks.
+    """
+    mask = ~targets.isnan()
+    return torch.nn.functional.mse_loss(preds[mask], targets[mask])
+
+
+def compute_rank_loss(
+    preds: torch.Tensor,
+    targets: torch.Tensor,
+    sample_frac: float = config.RANK_LOSS_PAIR_SAMPLE_FRAC,
+) -> torch.Tensor:
+    """
+    Pairwise BPR ranking loss over valid stocks at one time step.
+
+    For each sampled pair (i, j) where target_i != target_j:
+        loss += softplus(-sign(target_i - target_j) * (pred_i - pred_j))
+    which equals -log(sigmoid(sign(target_diff) * pred_diff)).
+
+    Pairs where i == j or |target_i - target_j| < 1e-8 are excluded.
+    If fewer than 2 valid stocks exist, returns a zero tensor with no grad_fn
+    (the training loop skips these steps via a grad_fn check).
+
+    preds:       shape (num_stocks,), predicted RV.
+    targets:     shape (num_stocks,), actual RV, may contain NaN.
+    sample_frac: fraction of N*(N-1)/2 pairs to sample.
+
+    Returns scalar loss tensor.
+    Lookahead safety: pure arithmetic on single time-step tensors, no date indexing.
+    """
+    valid = ~(preds.isnan() | targets.isnan())
+    pv = preds[valid]
+    tv = targets[valid]
+    n = pv.shape[0]
+
+    if n < 2:
+        return torch.tensor(0.0, device=preds.device)
+
+    n_pairs = max(1, int(n * (n - 1) / 2 * sample_frac))
+    idx_i = torch.randint(0, n, (n_pairs,), device=pv.device)
+    idx_j = torch.randint(0, n, (n_pairs,), device=pv.device)
+
+    not_same = idx_i != idx_j
+    idx_i = idx_i[not_same]
+    idx_j = idx_j[not_same]
+    if idx_i.shape[0] == 0:
+        return torch.tensor(0.0, device=preds.device)
+
+    diff_target = tv[idx_i] - tv[idx_j]
+    not_tied = diff_target.abs() >= 1e-8
+    idx_i = idx_i[not_tied]
+    idx_j = idx_j[not_tied]
+    diff_target = diff_target[not_tied]
+    if idx_i.shape[0] == 0:
+        return torch.tensor(0.0, device=preds.device)
+
+    diff_pred = pv[idx_i] - pv[idx_j]
+    signed_diff = diff_target.sign() * diff_pred
+    return torch.nn.functional.softplus(-signed_diff).mean()
+
+
 def train_lstm(
     model: LSTMModel,
     features: np.ndarray,
@@ -185,6 +251,7 @@ def train_gnn(
     lr: float = config.LEARNING_RATE,
     patience: int = config.EARLY_STOP_PATIENCE,
     save_periodic: bool = True,
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[nn.Module, list[float]]:
     """
     Train a GNN model with early stopping and checkpointing.
@@ -206,6 +273,9 @@ def train_gnn(
     lr:            Adam learning rate (default: config.LEARNING_RATE).
     patience:      Early stopping patience in epochs (default: config.EARLY_STOP_PATIENCE).
     save_periodic: If False, skip epoch-interval checkpoints (useful for grid search).
+    loss_fn:       Callable(preds, targets) -> scalar loss. Both args are shape (num_stocks,)
+                   with NaN in targets for missing stocks. Defaults to masked MSE.
+                   Pass compute_rank_loss for pairwise BPR rank loss.
 
     Returns: (best model loaded from checkpoint, val_loss_history per epoch)
 
@@ -213,6 +283,9 @@ def train_gnn(
     Best:        config.CHECKPOINTS_DIR / f"gnn_{graph_type}_best.pt"
     Val loss:    config.DATA_RESULTS_DIR / f"gnn_{graph_type}_val_loss.json"
     """
+    if loss_fn is None:
+        loss_fn = _masked_mse
+
     ckpt_dir  = Path(config.CHECKPOINTS_DIR)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_path = ckpt_dir / f"gnn_{graph_type}_best.pt"
@@ -233,7 +306,6 @@ def train_gnn(
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, patience=5, factor=0.5, verbose=False
     )
-    criterion = nn.MSELoss()
 
     best_val_loss    = float("inf")
     patience_counter = 0
@@ -251,8 +323,13 @@ def train_gnn(
             mask = ~y.isnan()
             if not mask.any():
                 continue
+            preds = model(x, ei)
+            loss  = loss_fn(preds, y)
+            if loss.grad_fn is None:
+                # degenerate step: no valid pairs for rank loss (effectively impossible
+                # with 465 stocks, but guarded against for robustness)
+                continue
             optimizer.zero_grad()
-            loss = criterion(model(x, ei)[mask], y[mask])
             loss.backward()
             optimizer.step()
             train_loss_sum   += loss.item()
@@ -271,7 +348,7 @@ def train_gnn(
                 mask = ~y.isnan()
                 if not mask.any():
                     continue
-                val_loss_sum   += criterion(model(x, ei)[mask], y[mask]).item()
+                val_loss_sum   += loss_fn(model(x, ei), y).item()
                 val_steps_used += 1
 
         if train_steps_used == 0 or val_steps_used == 0:
@@ -531,6 +608,185 @@ def train_gnn_granger(
         graph_type="granger",
         device=device,
         max_epochs=max_epochs,
+    )
+
+
+def train_gnn_corr_rankloss(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    corr_graphs: dict[pd.Timestamp, torch.LongTensor],
+    splits: pd.DataFrame,
+    device: torch.device,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[nn.Module, list[float]]:
+    """
+    Train GNN-Correlation with pairwise BPR rank loss.
+
+    Mirrors train_gnn_corr_ablation's architecture selection: uses GNNModelV2 with
+    the hparam-tuned config if gnn_hparam_search_results.json exists, else falls
+    back to GNNModel with config defaults.
+
+    corr_graphs: {week_timestamp: edge_index} for the best threshold, covering
+                 both train and val weeks. Build by merging load_corr_graphs outputs:
+                 {**load_corr_graphs(best_theta, "train"), **load_corr_graphs(best_theta, "val")}
+
+    features:   shape (num_weeks, num_stocks, num_features)
+    target:     shape (num_weeks, num_stocks)
+    week_index: DatetimeIndex aligned to features/target rows
+    splits:     DataFrame with columns ['week', 'split']
+    device:     torch.device for computation
+    max_epochs: hard epoch ceiling
+
+    Returns: (best model loaded from checkpoint, val_loss_history per epoch)
+    Checkpoint: config.CHECKPOINTS_DIR / "gnn_corr_rankloss_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / "gnn_corr_rankloss_val_loss.json"
+    """
+    import json as _json
+    from src.models import GNNModelV2
+
+    in_channels = features.shape[2]
+    results_dir = Path(config.DATA_RESULTS_DIR)
+    hparam_json = results_dir / "gnn_hparam_search_results.json"
+
+    set_seeds()
+    if hparam_json.exists():
+        hparam_cfg = _json.load(open(hparam_json))["best_config"]
+        model: nn.Module = GNNModelV2(
+            in_channels=in_channels,
+            hidden_dim=int(hparam_cfg["hidden_dim"]),
+            dropout=float(hparam_cfg["dropout"]),
+            num_layers=int(hparam_cfg["num_layers"]),
+            batch_norm=bool(hparam_cfg["batch_norm"]),
+        ).to(device)
+    else:
+        model = GNNModel(in_channels=in_channels).to(device)
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week, g=corr_graphs: g.get(week, torch.zeros(2, 0, dtype=torch.long))
+    )
+
+    return train_gnn(
+        model=model,
+        features=features,
+        target=target,
+        week_index=week_index,
+        edge_index_fn=edge_fn,
+        splits=splits,
+        graph_type="corr_rankloss",
+        device=device,
+        max_epochs=max_epochs,
+        lr=config.GNN_LEARNING_RATE,
+        loss_fn=compute_rank_loss,
+    )
+
+
+def train_gnn_sector_rankloss(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    sector_graphs: dict,
+    splits: pd.DataFrame,
+    device: torch.device,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[nn.Module, list[float]]:
+    """
+    Train GNN-Sector with pairwise BPR rank loss.
+
+    Uses GNNModel (same architecture as the MSE sector model). Sector graph
+    lookup and lookahead rules are identical to train_gnn_sector.
+
+    features:      shape (num_weeks, num_stocks, num_features)
+    target:        shape (num_weeks, num_stocks)
+    week_index:    DatetimeIndex aligned to features/target rows
+    sector_graphs: {year (int): edge_index LongTensor}
+    splits:        DataFrame with columns ['week', 'split']
+    device:        torch.device for computation
+    max_epochs:    hard epoch ceiling
+
+    Returns: (best model loaded from checkpoint, val_loss_history per epoch)
+    Checkpoint: config.CHECKPOINTS_DIR / "gnn_sector_rankloss_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / "gnn_sector_rankloss_val_loss.json"
+    """
+    years_needed = {w.year for w in week_index}
+    missing = years_needed - set(sector_graphs.keys())
+    assert not missing, f"sector_graphs missing years: {missing}"
+
+    in_channels = features.shape[2]
+    set_seeds()
+    model = GNNModel(in_channels=in_channels).to(device)
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week: sector_graphs[week.year]
+    )
+
+    return train_gnn(
+        model=model,
+        features=features,
+        target=target,
+        week_index=week_index,
+        edge_index_fn=edge_fn,
+        splits=splits,
+        graph_type="sector_rankloss",
+        device=device,
+        max_epochs=max_epochs,
+        loss_fn=compute_rank_loss,
+    )
+
+
+def train_gnn_granger_rankloss(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    granger_edge_index: torch.LongTensor,
+    splits: pd.DataFrame,
+    device: torch.device,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[nn.Module, list[float]]:
+    """
+    Train GNN-Granger with pairwise BPR rank loss.
+
+    Uses GNNModel (same architecture as the MSE Granger model). The static
+    directed Granger edge index is used identically to train_gnn_granger.
+
+    features:           shape (num_weeks, num_stocks, num_features)
+    target:             shape (num_weeks, num_stocks)
+    week_index:         DatetimeIndex aligned to features/target rows
+    granger_edge_index: static directed LongTensor, shape (2, num_edges)
+    splits:             DataFrame with columns ['week', 'split']
+    device:             torch.device for computation
+    max_epochs:         hard epoch ceiling
+
+    Returns: (best model loaded from checkpoint, val_loss_history per epoch)
+    Checkpoint: config.CHECKPOINTS_DIR / "gnn_granger_rankloss_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / "gnn_granger_rankloss_val_loss.json"
+    """
+    assert granger_edge_index.shape[0] == 2, (
+        f"granger_edge_index row dim should be 2, got {granger_edge_index.shape[0]}"
+    )
+    assert granger_edge_index.shape[1] > 0, (
+        "granger_edge_index has no edges"
+    )
+
+    in_channels = features.shape[2]
+    set_seeds()
+    model = GNNModel(in_channels=in_channels).to(device)
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week: granger_edge_index
+    )
+
+    return train_gnn(
+        model=model,
+        features=features,
+        target=target,
+        week_index=week_index,
+        edge_index_fn=edge_fn,
+        splits=splits,
+        graph_type="granger_rankloss",
+        device=device,
+        max_epochs=max_epochs,
+        loss_fn=compute_rank_loss,
     )
 
 

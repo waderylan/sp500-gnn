@@ -29,6 +29,14 @@ TRANSACTION_COST_BPS = 10            # one-way cost in basis points
 LONG_SHORT_QUANTILE  = 0.25          # fraction of stocks in each leg of the long-short portfolio
 VOL_TARGET           = 0.10          # annualized target portfolio volatility for vol-targeted construction (10%)
 
+# Rank loss training
+RANK_LOSS_PAIR_SAMPLE_FRAC = 0.10   # fraction of all N*(N-1)/2 pairs sampled per time step
+                                     # 465 stocks -> ~107k pairs; 10% ~ 10k pairs per step
+
+# Ranking evaluation
+TOP_K_HIT_RATE_Q         = 0.25    # top quartile, consistent with long-short cutoff
+PAIRWISE_ACC_SAMPLE_FRAC = 0.10    # fraction of pairs sampled per week for pairwise accuracy
+
 # Graph construction — correlation
 CORR_THRESHOLD    = 0.3             # edge threshold θ — set to ablation winner (see corr_threshold_ablation.json)
 CORR_LOOKBACK_DAYS = 252            # rolling lookback window for correlation graph
