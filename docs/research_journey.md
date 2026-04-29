@@ -452,9 +452,241 @@ One open question: the BPR loss penalizes at the pair level but does not have an
 
 ---
 
+## Chapter 14 — Freezing the Baseline and Making the Project Auditable
+
+After the rank-loss work, the project had become productive but fragile. There were now original MSE models, a tuned GNN-Correlation, rank-loss GNNs, an ensemble, several portfolio constructions, and a growing pile of CSV/parquet outputs. That was enough to make progress, but not enough to make a defensible paper. The next move was not another model. It was to freeze the state of the project so later experiments could not accidentally overwrite the control condition.
+
+The baseline snapshot was written to `data/results/frozen_baseline_20260428T211759Z`, with the manifest saved at `data/results/frozen_baseline_manifest.json`. The manifest records 233 files with sizes, modification times, and SHA-256 hashes. This matters because the baseline is not a single metric table. It is a state of the whole experiment: checkpoints, predictions, metrics, rank-loss outputs, portfolio returns, hyperparameter JSON files, and graph-ablation artifacts.
+
+The frozen roster contains 10 models:
+
+| Model | Family | Graph | Loss |
+|---|---|---|---|
+| HAR per-stock | HAR | none | squared error |
+| HAR pooled | HAR | none | squared error |
+| LSTM | LSTM | none | MSE |
+| GNN-Correlation | GNN | correlation | MSE |
+| GNN-Sector | GNN | sector | MSE |
+| GNN-Granger | GNN | granger | MSE |
+| GNN-Ensemble | GNN ensemble | correlation + sector + granger | MSE |
+| Rank-loss GNN-Correlation | GNN | correlation | BPR rank |
+| Rank-loss GNN-Sector | GNN | sector | BPR rank |
+| Rank-loss GNN-Granger | GNN | granger | BPR rank |
+
+This freeze changed the psychology of the project. Before the snapshot, every rerun carried some risk of silently changing the story. After the snapshot, later feature experiments could be treated as additions rather than replacements. The baseline could be wrong, imperfect, or incomplete, but it was at least fixed.
+
+The experiment registry was added at `data/results/experiment_registry.csv`. It now has 16 rows: the 10 frozen baseline/rank-loss models, LSTM + Macro, three macro GNNs, the macro ensemble, and the tuned macro GNN-Correlation. Each row records the experiment id, model family, graph type, loss type, feature version, graph version, checkpoint path, and metric/prediction artifacts. This is the first time the project had a single machine-readable provenance table instead of provenance spread across notebooks, JSON files, checkpoint names, and memory.
+
+The important design choice: the registry is explicit, not magic. New models are not auto-discovered just because a checkpoint exists. That is intentional. If a model matters enough to compare, it needs a row with its feature version, graph version, loss type, and artifact paths. This makes the registry slightly more manual, but much safer for a research codebase where accidental files should not become paper results.
+
+---
+
+## Chapter 15 — Reproducibility Cleanup
+
+Several small inconsistencies were fixed before adding new features. None of them were exciting, but each one could have created reviewer-level confusion later.
+
+The biggest issue was the official tuned GNN-Correlation configuration. Earlier docs and `config.py` had drifted around `hidden_dim=128` and `lr=3e-4`, while the later hparam artifact selected a different official checkpoint: `hidden_dim=256`, `lr=1e-3`, `dropout=0.3`, `batch_norm=False`, `num_layers=3`. The code, registry, and docs were aligned to the official checkpoint. This does not make the model better; it makes the comparison auditable. The model reported in the text now matches the model loaded by the code.
+
+The LSTM default hidden dimension was corrected so `LSTMModel` defaults to `config.LSTM_HIDDEN_DIM`, not the generic `config.HIDDEN_DIM`. This mattered because `HIDDEN_DIM` had effectively become a GNN setting. If future notebooks instantiated `LSTMModel(input_size=n_feats)` without passing a hidden size, the LSTM could silently inherit a GNN width and become a different baseline.
+
+Universe language was also locked down. The official method is the current-constituent S&P 500 list scraped from Wikipedia, converted to yfinance symbols, then filtered by historical coverage. This is not a historical point-in-time membership universe. That limitation is real and should be described honestly, but the implementation is now documented consistently. The reproducibility artifact `data/results/universe_reproducibility.csv` records candidate/final count and coverage settings.
+
+Sector labels were standardized from yfinance-style labels into canonical GICS-style labels. This is easy to dismiss as cosmetic, but it is not. Sector graphs, sector-neutral portfolios, ex-sector robustness checks, and any statement about Information Technology or Communication Services all depend on having a stable taxonomy. The sector mapping now lives in code rather than prose.
+
+---
+
+## Chapter 16 — Significance Testing
+
+The first evaluation tables were useful for model development, but point estimates alone were too weak for final claims. The MSE differences were often tiny. For example, the frozen GNN ensemble beat LSTM by about 0.00041 MSE and HAR per-stock by about 0.00085 MSE. With only 103 test weeks, this is exactly the kind of result that can look meaningful in a table while failing a time-series test.
+
+`src/significance.py` now implements the core testing layer:
+
+- Diebold-Mariano tests using weekly loss differentials.
+- Harvey-Leybourne-Newbold small-sample correction.
+- Benjamini-Hochberg FDR correction.
+- Circular block bootstrap for Sharpe ratios and Sharpe differences.
+
+The key methodological correction was to test per-week model error series, not pooled scalar MSE. The weekly loss series is:
+
+```text
+weekly_mse[t] = mean across stocks of (actual_rv[t] - predicted_rv[t])^2
+```
+
+Those series are saved in `data/results/weekly_model_errors.parquet`. The DM test then operates on 103 weekly loss differentials, preserving the time structure of the forecast errors. This is more defensible than pretending that all stock-week errors are independent observations.
+
+The initial significance artifacts are:
+
+- `data/results/dm_test_results.csv`
+- `data/results/bootstrap_sharpe_ci.csv`
+- `data/results/significance_summary.csv`
+- `data/results/weekly_model_errors.parquet`
+
+The final significance pass found only a narrow set of statistically supportable MSE claims. In `dm_test_results.csv`, the tuned macro correlation GNN is FDR-significant versus HAR per-stock (`p_bh=0.0112`) and HAR pooled (`p_bh=0.0033`). The matched macro-vs-baseline comparisons did not survive FDR correction; the best adjusted p-value was about 0.200. This is an important constraint on the paper story. Macro features improved several point estimates, but the formal tests do not support saying every macro upgrade significantly improved its matched baseline.
+
+The bootstrap portfolio result is similarly cautionary. The final summary reports 0 positive Sharpe-difference intervals for the broad baseline/final comparisons, but 7 positive intervals among 24 matched macro Sharpe-difference intervals. Translation: the return side has some encouraging macro-feature evidence, especially in portfolio variants, but it is not a blanket win across every comparison.
+
+---
+
+## Chapter 17 — Diagnostics on the Frozen Models
+
+The diagnostics phase was where the earlier symptoms became measurable. The project already suspected that several things were happening: predictions were too compressed, correlation graphs changed regime by regime, dense graphs might oversmooth node embeddings, and full-universe Rank IC might hide sector-level effects. The diagnostics turned those suspicions into artifacts.
+
+Calibration and spread diagnostics were added to `src/diagnostics.py` and displayed in `notebooks/05_evaluate.ipynb`. The core outputs are:
+
+- `data/results/calibration_summary.csv`
+- `data/results/calibration_bins.csv`
+- `data/results/prediction_spread_by_week.csv`
+- calibration figures under `data/results/figures/`
+
+The calibration table explains why portfolio constructions react differently to the same forecast model. The original GNN-Correlation had a calibration slope of 1.183 and prediction std of 0.066. LSTM had a slope of 0.930 and prediction std of 0.079. HAR per-stock had lower slope, 0.745, but wider prediction std around 0.100. In minimum-variance portfolios, wider prediction ranges matter because predicted RV becomes the covariance diagonal. This is why a model can look worse on MSE but still produce a more differentiated optimizer input.
+
+Graph-density diagnostics were saved to `data/results/correlation_graph_density.csv`. The oversmoothing audit was saved to `data/results/oversmoothing_audit.csv`. The oversmoothing result was not subtle. For GNN-Correlation, mean pairwise embedding distance fell sharply from layer 1 to layer 3 across representative weeks. In a calm 2017 week it dropped from about 4.47 at layer 1 to 0.58 at layer 3. In a 2023 validation week it dropped from about 3.04 to 0.52. That is direct evidence that the third message-passing layer, while helpful by validation MSE, makes node embeddings much more similar.
+
+The COVID week looked different but still informative: the correlation graph had 197,420 edges and layer-3 distance around 0.68. Dense crisis graphs do not merely add information. They also increase the risk that every stock receives nearly the same market-mode message. This supports the future-work idea of DropEdge, residual connections, Jumping Knowledge, or regime-gated message passing. But under the implementation plan, those remain future work unless the simpler paper-scope fixes fail.
+
+Within-sector Rank IC was added to test whether full-universe IC was mostly sector sorting. The output files are `data/results/within_sector_rank_ic_table.csv` and `data/results/within_sector_rank_ic_by_sector.csv`. The results were useful:
+
+| Model | Mean within-sector Rank IC |
+|---|---:|
+| LSTM + Macro | 0.4054 |
+| GNN-Ensemble + Macro | 0.3970 |
+| GNN-Correlation + Macro | 0.3909 |
+| GNN-Sector + Macro | 0.3896 |
+| LSTM | 0.3882 |
+| GNN-Ensemble | 0.3782 |
+| GNN-Correlation | 0.3765 |
+| HAR per-stock | 0.3610 |
+| HAR pooled | 0.3536 |
+| GNN-Granger | 0.3255 |
+
+The important conclusion: the signal is not only sector-level. The IC falls somewhat inside sectors, but it does not disappear. Macro-feature models and LSTM still rank stocks inside sectors. This supports the idea that sector-neutral portfolios are worth implementing next, because there is at least measurable within-sector ranking signal to exploit.
+
+---
+
+## Chapter 18 — Market-Regime Features
+
+The macro/regime feature upgrade was the first major feature change after the freeze. The motivation came directly from the diagnostics and test-period behavior: graph structure helped in some regimes and hurt in others. The model needed some way to know whether the market was calm, stressed, correlated, rates-sensitive, credit-stressed, or momentum-led.
+
+The feature set was intentionally compact:
+
+- VIX level.
+- VIX 1-week change.
+- SPY 21-day realized volatility.
+- SPY 1-week return.
+- SPY 1-month return.
+- 10Y-2Y Treasury spread.
+- Investment-grade credit spread.
+- Average pairwise stock correlation.
+- Correlation graph density.
+
+The new pipeline lives in `src/macro_dataset.py` and `src/regime_features.py`. It writes:
+
+- `data/features/regime_features.parquet`
+- `data/features/regime_features_meta.json`
+- `data/features/regime_normalization_stats.csv`
+- `data/features/features_macro.parquet`
+- `data/features/features_macro_meta.json`
+
+The lookahead rule is preserved: feature row T may use data through Friday of week T only, while the target is RV in week T+1. Macro features are global per week, then duplicated across stocks in the node tensor. The normalization is time-series normalization using train-only mean/std, not cross-sectional z-scoring after duplication. This matters because cross-sectionally normalizing a duplicated global feature would erase the signal or create divide-by-zero behavior.
+
+The normalization audit had no missingness for VIX, VIX change, weekly SPY return, Treasury spread, credit spread, average pairwise correlation, or graph density. SPY 21-day RV and SPY 1-month return had about 0.96% train missingness and 0.70% all-period missingness, which is consistent with rolling-window warm-up rather than data failure.
+
+All neural baselines were retrained fairly with the same expanded feature tensor:
+
+| Model | Best validation MSE |
+|---|---:|
+| LSTM + Macro | 0.019594 |
+| GNN-Correlation + Macro | 0.020164 |
+| GNN-Sector + Macro | 0.020043 |
+| GNN-Granger + Macro | 0.019875 |
+
+The first macro training result was mixed. LSTM + Macro had the best validation MSE among the first macro models, and the untuned GNN-Correlation + Macro was worse than its frozen counterpart on test MSE. This was a useful warning: adding regime features is not automatically helpful. The model still has to learn how to use them, and a tuned architecture selected for the baseline feature set may not be optimal for the expanded feature set.
+
+---
+
+## Chapter 19 — Macro GNN Hyperparameter Search and Evaluation
+
+Because the initial untuned GNN-Correlation + Macro underperformed, a macro-specific GNN-Correlation hyperparameter search was run. This was the right choice methodologically: macro features changed the input dimension and feature distribution, so blindly reusing the baseline GNN architecture would not be a fair test.
+
+The macro search wrote 48 validation-loss JSON files and the aggregate `data/results/gnn_corr_macro_hparam_search_results.json`. The selected tuned macro correlation model was registered as `macro_gnn_correlation_hparam` and saved as `GNN-Correlation + Macro Tuned`.
+
+The final ML table changed the project story:
+
+| Model | Test MSE | DA |
+|---|---:|---:|
+| GNN-Correlation + Macro Tuned | 0.030889 | 0.7197 |
+| GNN-Granger + Macro | 0.031439 | 0.7136 |
+| GNN-Sector + Macro | 0.031508 | 0.7043 |
+| GNN-Ensemble + Macro | 0.031598 | 0.7148 |
+| GNN-Ensemble | 0.032012 | 0.7004 |
+| GNN-Correlation | 0.032191 | 0.7122 |
+| LSTM | 0.032424 | 0.7088 |
+| HAR per-stock | 0.032858 | 0.7070 |
+
+The tuned macro correlation GNN is now the best point-forecast model in the table. It improves over the frozen GNN-Correlation by about 0.00130 MSE and over HAR per-stock by about 0.00197 MSE. That second comparison survives the final DM/FDR test. The matched macro-vs-baseline improvement does not survive FDR correction, so the honest wording is: the tuned macro GNN is significantly better than HAR baselines in the final table, but the macro upgrade itself is not statistically significant across matched model pairs after FDR correction.
+
+Rank IC also improved. The best overall Rank IC is the macro ensemble at 0.4378, followed by GNN-Granger + Macro at 0.4295, LSTM at 0.4288, and GNN-Correlation + Macro Tuned at 0.4286. This is a subtle but important result. The best MSE model is not the best ranking model. The macro ensemble is the best cross-sectional ranker, while the tuned macro correlation GNN is the best point forecaster.
+
+The macro portfolio results were stronger than the ML significance story. In inverse-volatility portfolios, equal-weight still wins with Sharpe 0.513, but macro GNNs moved closer:
+
+| Model | Inverse-vol Sharpe |
+|---|---:|
+| Equal-weight | 0.513 |
+| GNN-Sector + Macro | 0.468 |
+| GNN-Ensemble + Macro | 0.465 |
+| GNN-Granger + Macro | 0.456 |
+| GNN-Correlation + Macro Tuned | 0.425 |
+| GNN-Granger | 0.423 |
+
+In minimum-variance portfolios, the macro graph models became much more interesting:
+
+| Model | Min-var Sharpe |
+|---|---:|
+| GNN-Sector + Macro | 0.984 |
+| GNN-Granger + Macro | 0.973 |
+| GNN-Ensemble + Macro | 0.914 |
+| HAR pooled | 0.729 |
+| GNN-Correlation + Macro Tuned | 0.671 |
+| HAR per-stock | 0.635 |
+
+This is one of the more important findings so far. The macro features appear especially useful when the portfolio construction uses both predicted volatility and covariance structure. Sector and Granger macro models do not win the point-forecast table, but they dominate minimum-variance Sharpe. This supports the project's central framing: graph value depends on the objective and the portfolio construction, not just MSE.
+
+The macro calibration table also shows why different models win different downstream tasks. GNN-Correlation + Macro Tuned has the highest Pearson correlation with actual RV among the final models (0.4495) and a wider prediction std (0.1138), but its calibration slope is 0.768. GNN-Granger + Macro and GNN-Ensemble + Macro have higher slopes around 1.48 and 1.44 but narrower prediction std around 0.058. These are not interchangeable forecasts. The optimizer sees different covariance diagonals even when MSEs are close.
+
+---
+
+## Chapter 20 — Final Result Notebook and Current State
+
+A final artifact-reader notebook was created at `notebooks/08_final_results.ipynb`, generated by `scripts/create_final_results_notebook.py`. This notebook is not another training notebook. It is meant to load saved artifacts, display the final result tables, and write final CSVs/figures for the paper workflow.
+
+The final result artifacts include:
+
+- `data/results/final_ml_metrics_table.csv`
+- `data/results/final_rank_ic_table.csv`
+- `data/results/final_calibration_summary.csv`
+- `data/results/final_portfolio_inverse_vol_metrics.csv`
+- `data/results/final_portfolio_long_short_metrics.csv`
+- `data/results/final_portfolio_vol_target_metrics.csv`
+- `data/results/final_portfolio_minvar_metrics.csv`
+- `data/results/final_dm_test_summary.csv`
+- `data/results/final_bootstrap_sharpe_summary.csv`
+- `data/results/final_macro_vs_baseline_deltas.csv`
+- `data/results/final_significance_summary.csv`
+
+The current project state is much more credible than the original exploratory version. The baseline is frozen. The registry records provenance. Reproducibility inconsistencies are fixed. Significance tests exist. Diagnostics explain calibration, spread, graph density, oversmoothing, regimes, and within-sector ranking. Macro/regime features have been added with lookahead-safe train-only normalization. Macro neural models were trained and evaluated fairly, including LSTM.
+
+The story is not that GNNs always dominate. That would still be too strong. The better story is conditional:
+
+```text
+Graph structure contains useful cross-sectional volatility information, but its value depends on regime stability, objective alignment, calibration, and portfolio construction.
+```
+
+The latest evidence supports that framing. Macro graph models now lead the point-forecast table, the macro ensemble leads Rank IC, and sector/granger macro models lead minimum-variance portfolio Sharpe. But matched macro-vs-baseline DM tests do not survive FDR correction, and equal-weight still beats inverse-volatility portfolios on Sharpe. The results are useful precisely because they are not one-dimensional.
+
+---
+
 ## Open questions
 
-- Rank loss models show improved IC, ICIR, and hit rate vs. MSE models but predictions lose absolute calibration. A mixed loss (rank loss + small MSE weight) would test whether both properties can be retained simultaneously.
-- Pairwise accuracy as implemented measures raw prediction differences, which is dominated by floating-point noise when rank loss compresses prediction spread. A rank-based pairwise accuracy (compare ranks rather than values) would be a cleaner counterpart metric for rank loss models.
-- Portfolio evaluation for rank loss models is pending. Long-short is the natural first test since it depends only on ranking.
-- Significance tests (DM test, block bootstrap for Sharpe) are pending in Phase 5.3.
+- Sector-neutral and ex-sector portfolios remain the next finance robustness checks after mixed loss. The within-sector IC results suggest there is real within-sector signal, but portfolio construction still needs to prove it.
+- The macro feature upgrade improved several final results, but matched macro-vs-baseline DM tests did not survive FDR correction. The paper should report this honestly and avoid claiming universal macro-feature significance.
+- Oversmoothing is measured, especially in dense correlation graphs, but architecture fixes such as DropEdge, residual connections, Jumping Knowledge, and regime-gated GNNs remain future work unless the paper-scope tasks fail.
