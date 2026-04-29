@@ -53,12 +53,12 @@ Notebook writing rule for every applicable item: create or update notebooks so t
   Add calibration diagnostics, prediction-spread diagnostics, graph-density time series, regime breakdowns, oversmoothing audit, and within-sector Rank IC. These explain why the current GNNs help in some places and fail in others.
   Notebook output: add ML diagnostics to `notebooks/05_evaluate.ipynb`, graph-density and oversmoothing diagnostics to `notebooks/03_graphs.ipynb` or `notebooks/04_gnn_models.ipynb` as appropriate, and save diagnostic tables/figures under `data/results/` and `data/results/figures/`. Each diagnostic notebook should display the key table plus at least one rendered figure where useful; execute/save each affected notebook with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb`.
 
-- [ ] **6. Add market-regime features**
+- [x] **6. Add market-regime features**
 
   Add macro/regime data, build regime features with train-only normalization, extend the feature tensor, version the feature set, and retrain LSTM plus all GNN variants fairly.
   Notebook output: show macro/regime feature coverage and normalization checks in `notebooks/02_features.ipynb`; show retraining results in `notebooks/04_baseline_models.ipynb` and `notebooks/04_gnn_models.ipynb`; save new feature artifacts under `data/features/` and new model artifacts under `data/results/` and `checkpoints/`. Execute/save notebooks with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb`; for long training cells, save checkpoints and metrics from the script/notebook run, then keep the notebook output focused on the final training summary and artifact paths.
 
-- [ ] **7. Evaluate macro-feature models**
+- [x] **7. Evaluate macro-feature models**
 
   Compare macro-feature models against the frozen baseline using MSE, Rank IC, calibration, portfolio metrics, and significance tests. Continue only if the results clarify or improve the paper story.
   Notebook output: display macro-vs-baseline ML metrics in `notebooks/05_evaluate.ipynb`, portfolio metrics in `notebooks/06_portfolio.ipynb`, and significance results in `notebooks/07_significance.ipynb`; saved comparison tables should live under `data/results/`. Execute/save all three notebooks with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb` so the comparison tables and figures are visible when opened.
@@ -378,7 +378,7 @@ This phase explains why existing results look the way they do. Complete it befor
 
 This is the first major feature improvement. It should be implemented after Phase 1 and ideally after Phase 2 diagnostics are available.
 
-- [ ] **Define the macro/regime feature set**
+- [x] **Define the macro/regime feature set**
 
   Start with a compact set:
 
@@ -394,7 +394,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: the goal is to tell the model whether the market is calm, stressed, momentum-led, rates-sensitive, credit-stressed, or highly correlated. Do not add dozens of macro variables at first. A small, interpretable set is easier to defend.
 
-- [ ] **Add macro data download/caching**
+- [x] **Add macro data download/caching**
 
   Add a data function that downloads and caches macro series.
 
@@ -410,7 +410,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: all macro data must be available before the prediction week. Use values through Friday of week `T` to predict week `T+1`.
 
-- [ ] **Add regime feature engineering in `src/features.py`**
+- [x] **Add regime feature engineering in `src/features.py`**
 
   Build a weekly macro/regime feature frame aligned to the existing weekly feature index.
 
@@ -427,7 +427,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: these features are global per week, so they will be duplicated across all stocks when building the node feature tensor.
 
-- [ ] **Normalize macro/regime features carefully**
+- [x] **Normalize macro/regime features carefully**
 
   Do not cross-sectionally z-score macro features after duplicating them across nodes. If every stock has the same VIX value in a given week, cross-sectional z-scoring would divide by zero or erase the feature.
 
@@ -441,7 +441,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: this is different from the current stock-level features, which are cross-sectionally normalized each week.
 
-- [ ] **Update feature tensor construction**
+- [x] **Update feature tensor construction**
 
   Extend the feature tensor from:
 
@@ -459,7 +459,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: this is the simplest correct implementation. It does not require a new GNN architecture.
 
-- [ ] **Version the feature set**
+- [x] **Version the feature set**
 
   Save metadata that records whether features are baseline-only or baseline-plus-regime.
 
@@ -471,7 +471,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: once macro features are added, old checkpoints are not compatible with the new input dimension. The registry must make this explicit.
 
-- [ ] **Retrain all neural models fairly**
+- [x] **Retrain all neural models fairly**
 
   Retrain:
 
@@ -487,7 +487,7 @@ This is the first major feature improvement. It should be implemented after Phas
 
   Context: if only the GNNs receive macro features, the comparison against LSTM becomes unfair. LSTM should get the same expanded node feature sequence.
 
-- [ ] **Evaluate macro-feature models against the frozen baseline**
+- [x] **Evaluate macro-feature models against the frozen baseline**
 
   Compare old vs new:
 
