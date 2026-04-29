@@ -48,7 +48,7 @@ Notebook writing rule for every applicable item: create or update notebooks so t
   Implement `src/significance.py`, generate per-week model error series, and add block-bootstrap Sharpe confidence intervals. This can run before or alongside diagnostics, but it must be complete before any final performance claims.
   Notebook output: write and display DM, bootstrap, and significance summary tables in `notebooks/07_significance.ipynb`. The notebook should show the main tables with sorted model comparisons, confidence intervals, and FDR-adjusted significance flags. Execute/save with `uv run jupyter nbconvert --to notebook --execute --inplace notebooks/07_significance.ipynb`; saved artifacts should be `data/results/dm_test_results.csv`, `data/results/bootstrap_sharpe_ci.csv`, and `data/results/significance_summary.csv`.
 
-- [ ] **5. Add core diagnostics on the existing baseline**
+- [x] **5. Add core diagnostics on the existing baseline**
 
   Add calibration diagnostics, prediction-spread diagnostics, graph-density time series, regime breakdowns, oversmoothing audit, and within-sector Rank IC. These explain why the current GNNs help in some places and fail in others.
   Notebook output: add ML diagnostics to `notebooks/05_evaluate.ipynb`, graph-density and oversmoothing diagnostics to `notebooks/03_graphs.ipynb` or `notebooks/04_gnn_models.ipynb` as appropriate, and save diagnostic tables/figures under `data/results/` and `data/results/figures/`. Each diagnostic notebook should display the key table plus at least one rendered figure where useful; execute/save each affected notebook with `uv run jupyter nbconvert --to notebook --execute --inplace <notebook>.ipynb`.
@@ -270,7 +270,7 @@ This is the highest-priority phase. Do not use new model results in a paper unti
 
 This phase explains why existing results look the way they do. Complete it before adding major new architectures.
 
-- [ ] **Add calibration diagnostics for all prediction models**
+- [x] **Add calibration diagnostics for all prediction models**
 
   For each model, compute:
 
@@ -291,7 +291,7 @@ This phase explains why existing results look the way they do. Complete it befor
 
   Context: rank-loss models improved ranking metrics but destroyed absolute calibration. Portfolio methods like inverse-volatility and minimum variance need calibrated levels, not only ranks.
 
-- [ ] **Add prediction-spread diagnostics**
+- [x] **Add prediction-spread diagnostics**
 
   Compute weekly cross-sectional spread:
 
@@ -303,7 +303,7 @@ This phase explains why existing results look the way they do. Complete it befor
 
   Context: the long-only inverse-volatility portfolios collapsed toward equal-weight because model predictions were not differentiated enough across 465 stocks. This diagnostic measures that problem directly.
 
-- [ ] **Add graph-density time series**
+- [x] **Add graph-density time series**
 
   For each correlation graph week, compute:
 
@@ -319,7 +319,7 @@ This phase explains why existing results look the way they do. Complete it befor
 
   Context: GNN-Correlation may work differently in sparse calm regimes versus dense crisis regimes. Dense graphs may cause oversmoothing or stale neighbor propagation.
 
-- [ ] **Run regime breakdowns of existing results**
+- [x] **Run regime breakdowns of existing results**
 
   Split test-period results by regimes:
 
@@ -339,7 +339,9 @@ This phase explains why existing results look the way they do. Complete it befor
 
   Context: the major diagnosis is regime instability. A model can be useful in one market environment and harmful in another. The paper should show this directly.
 
-- [ ] **Audit GNN oversmoothing**
+  Implementation note: current Step 5 artifacts include 2024/2025, market-return, graph-density, and average-absolute-correlation regimes from existing cached data. The high/low VIX split remains tied to the Phase 3 macro data cache because no VIX artifact exists in the current repository state.
+
+- [x] **Audit GNN oversmoothing**
 
   Add a diagnostic that captures node embeddings after each GraphSAGE layer and computes cross-sectional dispersion.
 
@@ -359,7 +361,7 @@ This phase explains why existing results look the way they do. Complete it befor
 
   Context: a 3-layer GNN on dense correlation graphs may make node embeddings too similar. If oversmoothing is present, residual connections, DropEdge, or Jumping Knowledge should be tested before deeper models.
 
-- [ ] **Add within-sector Rank IC**
+- [x] **Add within-sector Rank IC**
 
   Compute Spearman Rank IC separately within each sector at each week, then average.
 
@@ -834,8 +836,8 @@ If work starts now, the next ten concrete tasks should be:
 - [x] Fix LSTM hidden-dim default.
 - [x] Lock universe construction docs to current S&P 500 constituents filtered by historical coverage.
 - [x] Standardize sector taxonomy.
-- [ ] Add calibration and prediction-spread diagnostics.
-- [ ] Add graph-density and regime-breakdown diagnostics.
+- [x] Add calibration and prediction-spread diagnostics.
+- [x] Add graph-density and regime-breakdown diagnostics.
 
 After those are done, the next model-improvement task should be the market-regime feature upgrade, followed by mixed rank-MSE loss.
 
