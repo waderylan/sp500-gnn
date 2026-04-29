@@ -14,13 +14,21 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import config
-from src.significance import block_bootstrap_sharpe, run_all_dm_tests
+from src.model_artifacts import MACRO_BASELINE_PAIRS
+from src.significance import (
+    benjamini_hochberg,
+    benjamini_hochberg_adjusted_p,
+    block_bootstrap_sharpe,
+    diebold_mariano_test,
+    run_all_dm_tests,
+)
 
 
 FALLBACK_PREDICTION_FILES = {
@@ -166,6 +174,30 @@ def build_dm_results(
     return run_all_dm_tests(comparison_models, baselines)
 
 
+def build_macro_dm_results(weekly_errors: pd.DataFrame) -> pd.DataFrame:
+    """Run matched macro-minus-baseline DM tests for step 7."""
+    pivot = weekly_errors.pivot(index="week", columns="model", values="weekly_mse").sort_index()
+    rows: list[dict[str, object]] = []
+    for baseline, macro in MACRO_BASELINE_PAIRS.items():
+        if baseline not in pivot.columns or macro not in pivot.columns:
+            continue
+        result = diebold_mariano_test(
+            pivot[macro].to_numpy(dtype=float),
+            pivot[baseline].to_numpy(dtype=float),
+        )
+        rows.append({"model": macro, "baseline": baseline, **result})
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(
+            columns=["model", "baseline", "dm_stat", "p_value", "p_value_bh", "rejected_bh", "n_weeks", "mean_loss_diff"]
+        )
+    p_values = df["p_value"].to_numpy(dtype=float)
+    df["p_value_bh"] = benjamini_hochberg_adjusted_p(p_values)
+    df["rejected_bh"] = benjamini_hochberg(p_values)
+    return df.sort_values("p_value").reset_index(drop=True)
+
+
 def _pivot_returns(df: pd.DataFrame) -> pd.DataFrame:
     """Return week-by-model net return matrix from a long-format artifact."""
     required = {"week", "model", "net_return"}
@@ -235,6 +267,47 @@ def build_bootstrap_results(
     return pd.DataFrame(rows).sort_values(["strategy", "comparison", "model"]).reset_index(drop=True)
 
 
+def build_macro_bootstrap_results(
+    results_dir: Path,
+    *,
+    block_size: int,
+    n_bootstrap: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Generate matched macro-vs-baseline Sharpe difference intervals."""
+    rows: list[dict[str, object]] = []
+    known_by_filename = {filename: strategy for strategy, filename in KNOWN_PORTFOLIO_RETURN_FILES.items()}
+    for path in sorted(results_dir.glob("portfolio*_returns.parquet")):
+        strategy = known_by_filename.get(path.name, path.stem.removeprefix("portfolio_").removesuffix("_returns"))
+        returns = _pivot_returns(pd.read_parquet(path))
+        for baseline, macro in MACRO_BASELINE_PAIRS.items():
+            if baseline not in returns.columns or macro not in returns.columns:
+                continue
+            aligned = returns[[macro, baseline]].dropna()
+            if aligned.empty:
+                continue
+            diff_ci = block_bootstrap_sharpe(
+                aligned[macro].to_numpy(dtype=float),
+                aligned[baseline].to_numpy(dtype=float),
+                block_size=block_size,
+                n_bootstrap=n_bootstrap,
+                seed=seed,
+            )
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "return_path": str(path),
+                    "model": macro,
+                    "baseline": baseline,
+                    "comparison": "macro_sharpe_diff",
+                    **diff_ci,
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["strategy", "model"]).reset_index(drop=True)
+
+
 def build_significance_summary(dm_results: pd.DataFrame, bootstrap_results: pd.DataFrame) -> pd.DataFrame:
     """Build a compact mixed summary for notebook and paper-audit review."""
     dm_summary = pd.DataFrame(
@@ -282,6 +355,47 @@ def build_significance_summary(dm_results: pd.DataFrame, bootstrap_results: pd.D
     return pd.concat([dm_summary, bootstrap_summary], ignore_index=True)
 
 
+def build_macro_significance_summary(
+    macro_dm_results: pd.DataFrame,
+    macro_bootstrap_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build a compact step 7 matched-pair significance summary."""
+    rows = [
+        {
+            "section": "macro_dm_tests",
+            "metric": "matched_pairs_fdr_significant",
+            "value": int(macro_dm_results["rejected_bh"].sum()) if not macro_dm_results.empty else 0,
+            "details": f"{len(macro_dm_results)} matched macro-vs-baseline DM comparisons",
+        },
+        {
+            "section": "macro_dm_tests",
+            "metric": "min_bh_adjusted_p",
+            "value": float(macro_dm_results["p_value_bh"].min()) if not macro_dm_results.empty else np.nan,
+            "details": "One-sided lower-loss alternative for macro model vs matched baseline",
+        },
+    ]
+    if macro_bootstrap_results.empty:
+        rows.append(
+            {
+                "section": "macro_bootstrap",
+                "metric": "positive_sharpe_diff_ci",
+                "value": 0,
+                "details": "No matched macro Sharpe-difference rows available",
+            }
+        )
+    else:
+        positive = macro_bootstrap_results[macro_bootstrap_results["ci_lower"] > 0.0]
+        rows.append(
+            {
+                "section": "macro_bootstrap",
+                "metric": "positive_sharpe_diff_ci",
+                "value": int(len(positive)),
+                "details": f"{len(macro_bootstrap_results)} matched Sharpe-difference intervals",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def generate_significance_artifacts(
     *,
     results_dir: Path,
@@ -296,24 +410,38 @@ def generate_significance_artifacts(
 
     weekly_errors = build_weekly_model_errors(results_dir, features_dir)
     dm_results = build_dm_results(weekly_errors, baseline_models=baseline_models)
+    macro_dm_results = build_macro_dm_results(weekly_errors)
     bootstrap_results = build_bootstrap_results(
         results_dir,
         block_size=block_size,
         n_bootstrap=n_bootstrap,
         seed=seed,
     )
+    macro_bootstrap_results = build_macro_bootstrap_results(
+        results_dir,
+        block_size=block_size,
+        n_bootstrap=n_bootstrap,
+        seed=seed,
+    )
     summary = build_significance_summary(dm_results, bootstrap_results)
+    macro_summary = build_macro_significance_summary(macro_dm_results, macro_bootstrap_results)
 
     paths = {
         "weekly_errors": results_dir / "weekly_model_errors.parquet",
         "dm_results": results_dir / "dm_test_results.csv",
+        "macro_dm_results": results_dir / "macro_dm_test_results.csv",
         "bootstrap_results": results_dir / "bootstrap_sharpe_ci.csv",
+        "macro_bootstrap_results": results_dir / "macro_bootstrap_sharpe_ci.csv",
         "summary": results_dir / "significance_summary.csv",
+        "macro_summary": results_dir / "macro_significance_summary.csv",
     }
     weekly_errors.to_parquet(paths["weekly_errors"], index=False)
     dm_results.to_csv(paths["dm_results"], index=False)
+    macro_dm_results.to_csv(paths["macro_dm_results"], index=False)
     bootstrap_results.to_csv(paths["bootstrap_results"], index=False)
+    macro_bootstrap_results.to_csv(paths["macro_bootstrap_results"], index=False)
     summary.to_csv(paths["summary"], index=False)
+    macro_summary.to_csv(paths["macro_summary"], index=False)
     return paths
 
 

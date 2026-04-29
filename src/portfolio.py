@@ -367,6 +367,7 @@ def run_all_model_long_short_backtests(
     log_returns_df: pd.DataFrame,
     tbill_rates: pd.Series,
     tickers: list[str],
+    model_predictions: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run a dollar-neutral long-short backtest for all six models.
@@ -402,29 +403,36 @@ def run_all_model_long_short_backtests(
     results_dir = Path(config.DATA_RESULTS_DIR)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    model_files = {
-        "GNN-Correlation": "test_preds_gnn_corr.parquet",
-        "GNN-Sector":      "test_preds_gnn_sector.parquet",
-        "GNN-Granger":     "test_preds_gnn_granger.parquet",
-        "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
-        "HAR per-stock":   "test_preds_har.parquet",
-        "HAR pooled":      "test_preds_har_pooled.parquet",
-        "LSTM":            "test_preds_lstm.parquet",
-    }
+    if model_predictions is None:
+        model_files = {
+            "GNN-Correlation": "test_preds_gnn_corr.parquet",
+            "GNN-Sector":      "test_preds_gnn_sector.parquet",
+            "GNN-Granger":     "test_preds_gnn_granger.parquet",
+            "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
+            "HAR per-stock":   "test_preds_har.parquet",
+            "HAR pooled":      "test_preds_har_pooled.parquet",
+            "LSTM":            "test_preds_lstm.parquet",
+        }
+        pred_dfs = {
+            label: pd.read_parquet(results_dir / fname).reindex(columns=tickers)
+            for label, fname in model_files.items()
+        }
+    else:
+        pred_dfs = {
+            label: df.reindex(columns=tickers)
+            for label, df in model_predictions.items()
+            if label != "Equal-weight"
+        }
 
-    pred_dfs: dict[str, pd.DataFrame] = {}
-    for label, fname in model_files.items():
-        df = pd.read_parquet(results_dir / fname)
-        pred_dfs[label] = df.reindex(columns=tickers)
+    if not pred_dfs:
+        raise ValueError("No model predictions were provided for long-short backtests.")
 
-    test_weeks   = pred_dfs["GNN-Correlation"].index
+    test_weeks   = next(iter(pred_dfs.values())).index
     weekly_ret   = compute_weekly_returns(log_returns_df).reindex(columns=tickers)
     holding_weeks = test_weeks + pd.Timedelta(days=7)
     actual_ret   = weekly_ret.reindex(holding_weeks).values  # (n_test, n_stocks)
 
     n_test   = len(test_weeks)
-    n_stocks = len(tickers)
-
     all_backtests: list[pd.DataFrame] = []
     all_summaries: dict[str, dict[str, float]] = {}
 
@@ -468,8 +476,9 @@ def run_all_model_long_short_backtests(
 
     ls_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(ls_returns_df) == 7 * n_test, (
-        f"Expected {7 * n_test} rows, got {len(ls_returns_df)}"
+    expected_rows = len(pred_dfs) * n_test
+    assert len(ls_returns_df) == expected_rows, (
+        f"Expected {expected_rows} rows, got {len(ls_returns_df)}"
     )
 
     metrics_table = (
@@ -479,7 +488,9 @@ def run_all_model_long_short_backtests(
           "avg_turnover", "max_long_weight"]]
     )
 
-    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == len(pred_dfs), (
+        f"Expected {len(pred_dfs)} model rows, got {len(metrics_table)}"
+    )
 
     ls_returns_df.to_parquet(results_dir / "portfolio_ls_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_ls_metrics_table.csv")
@@ -535,6 +546,7 @@ def run_all_model_backtests(
     log_returns_df: pd.DataFrame,
     tbill_rates: pd.Series,
     tickers: list[str],
+    model_predictions: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run the portfolio backtest for all six models plus the equal-weight benchmark.
@@ -571,24 +583,32 @@ def run_all_model_backtests(
     results_dir = Path(config.DATA_RESULTS_DIR)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    model_files = {
-        "HAR per-stock":  "test_preds_har.parquet",
-        "HAR pooled":     "test_preds_har_pooled.parquet",
-        "LSTM":           "test_preds_lstm.parquet",
-        "GNN-Correlation": "test_preds_gnn_corr.parquet",
-        "GNN-Sector":     "test_preds_gnn_sector.parquet",
-        "GNN-Granger":    "test_preds_gnn_granger.parquet",
-        "GNN-Ensemble":   "test_preds_gnn_ensemble.parquet",
-    }
+    if model_predictions is None:
+        model_files = {
+            "HAR per-stock":  "test_preds_har.parquet",
+            "HAR pooled":     "test_preds_har_pooled.parquet",
+            "LSTM":           "test_preds_lstm.parquet",
+            "GNN-Correlation": "test_preds_gnn_corr.parquet",
+            "GNN-Sector":     "test_preds_gnn_sector.parquet",
+            "GNN-Granger":    "test_preds_gnn_granger.parquet",
+            "GNN-Ensemble":   "test_preds_gnn_ensemble.parquet",
+        }
+        pred_dfs = {
+            label: pd.read_parquet(results_dir / fname).reindex(columns=tickers)
+            for label, fname in model_files.items()
+        }
+    else:
+        pred_dfs = {
+            label: df.reindex(columns=tickers)
+            for label, df in model_predictions.items()
+            if label != "Equal-weight"
+        }
 
-    # Load predictions for each model; align columns to tickers
-    pred_dfs: dict[str, pd.DataFrame] = {}
-    for label, fname in model_files.items():
-        df = pd.read_parquet(results_dir / fname)
-        pred_dfs[label] = df.reindex(columns=tickers)
+    if not pred_dfs:
+        raise ValueError("No model predictions were provided for portfolio backtests.")
 
     # All models share the same test weeks (Monday of feature week T)
-    test_weeks = pred_dfs["HAR per-stock"].index  # e.g. 2024-01-01 ... 2025-12-15
+    test_weeks = next(iter(pred_dfs.values())).index  # e.g. 2024-01-01 ... 2025-12-15
 
     # Compute weekly returns; holding weeks are test_weeks + 7 days
     weekly_ret = compute_weekly_returns(log_returns_df).reindex(columns=tickers)
@@ -621,8 +641,10 @@ def run_all_model_backtests(
 
     portfolio_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(portfolio_returns_df) == 8 * n_test, (
-        f"Expected {8 * n_test} rows, got {len(portfolio_returns_df)}"
+    expected_model_count = len(pred_dfs)
+    expected_rows = expected_model_count * n_test
+    assert len(portfolio_returns_df) == expected_rows, (
+        f"Expected {expected_rows} rows, got {len(portfolio_returns_df)}"
     )
 
     metrics_table = (
@@ -632,7 +654,9 @@ def run_all_model_backtests(
           "avg_turnover", "max_single_stock_weight"]]
     )
 
-    assert len(metrics_table) == 8, f"Expected 8 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == expected_model_count, (
+        f"Expected {expected_model_count} model rows, got {len(metrics_table)}"
+    )
 
     portfolio_returns_df.to_parquet(results_dir / "portfolio_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_metrics_table.csv")
@@ -648,6 +672,7 @@ def run_all_model_backtests_vol_target(
     log_returns_df: pd.DataFrame,
     tbill_rates: pd.Series,
     tickers: list[str],
+    model_predictions: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run a vol-targeted backtest for all six models using config.VOL_TARGET.
@@ -688,22 +713,31 @@ def run_all_model_backtests_vol_target(
     results_dir = Path(config.DATA_RESULTS_DIR)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    model_files = {
-        "HAR per-stock":   "test_preds_har.parquet",
-        "HAR pooled":      "test_preds_har_pooled.parquet",
-        "LSTM":            "test_preds_lstm.parquet",
-        "GNN-Correlation": "test_preds_gnn_corr.parquet",
-        "GNN-Sector":      "test_preds_gnn_sector.parquet",
-        "GNN-Granger":     "test_preds_gnn_granger.parquet",
-        "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
-    }
+    if model_predictions is None:
+        model_files = {
+            "HAR per-stock":   "test_preds_har.parquet",
+            "HAR pooled":      "test_preds_har_pooled.parquet",
+            "LSTM":            "test_preds_lstm.parquet",
+            "GNN-Correlation": "test_preds_gnn_corr.parquet",
+            "GNN-Sector":      "test_preds_gnn_sector.parquet",
+            "GNN-Granger":     "test_preds_gnn_granger.parquet",
+            "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
+        }
+        pred_dfs = {
+            label: pd.read_parquet(results_dir / fname).reindex(columns=tickers)
+            for label, fname in model_files.items()
+        }
+    else:
+        pred_dfs = {
+            label: df.reindex(columns=tickers)
+            for label, df in model_predictions.items()
+            if label != "Equal-weight"
+        }
 
-    pred_dfs: dict[str, pd.DataFrame] = {}
-    for label, fname in model_files.items():
-        df = pd.read_parquet(results_dir / fname)
-        pred_dfs[label] = df.reindex(columns=tickers)
+    if not pred_dfs:
+        raise ValueError("No model predictions were provided for vol-target backtests.")
 
-    test_weeks = pred_dfs["HAR per-stock"].index
+    test_weeks = next(iter(pred_dfs.values())).index
     weekly_ret = compute_weekly_returns(log_returns_df).reindex(columns=tickers)
     holding_weeks = test_weeks + pd.Timedelta(days=7)
     actual_ret = weekly_ret.reindex(holding_weeks).values
@@ -728,8 +762,9 @@ def run_all_model_backtests_vol_target(
 
     vt_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(vt_returns_df) == 7 * n_test, (
-        f"Expected {7 * n_test} rows, got {len(vt_returns_df)}"
+    expected_rows = len(pred_dfs) * n_test
+    assert len(vt_returns_df) == expected_rows, (
+        f"Expected {expected_rows} rows, got {len(vt_returns_df)}"
     )
 
     metrics_table = (
@@ -739,7 +774,9 @@ def run_all_model_backtests_vol_target(
           "avg_turnover", "max_single_stock_weight", "avg_equity_weight"]]
     )
 
-    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == len(pred_dfs), (
+        f"Expected {len(pred_dfs)} model rows, got {len(metrics_table)}"
+    )
 
     vt_returns_df.to_parquet(results_dir / "portfolio_vt_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_vt_metrics_table.csv")
@@ -848,6 +885,7 @@ def run_all_model_backtests_minvar(
     log_returns_df: pd.DataFrame,
     tbill_rates: pd.Series,
     tickers: list[str],
+    model_predictions: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run a minimum variance backtest for all six models.
@@ -894,36 +932,49 @@ def run_all_model_backtests_minvar(
     results_dir = Path(config.DATA_RESULTS_DIR)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    model_files = {
-        "HAR per-stock":   "test_preds_har.parquet",
-        "HAR pooled":      "test_preds_har_pooled.parquet",
-        "LSTM":            "test_preds_lstm.parquet",
-        "GNN-Correlation": "test_preds_gnn_corr.parquet",
-        "GNN-Sector":      "test_preds_gnn_sector.parquet",
-        "GNN-Granger":     "test_preds_gnn_granger.parquet",
-        "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
-    }
-
     print(SEP)
     print("MINIMUM VARIANCE BACKTEST")
     print(SEP)
     print(f"  MAX_WEIGHT        = {config.MAX_WEIGHT:.0%}")
     print(f"  CORR_LOOKBACK_DAYS= {config.CORR_LOOKBACK_DAYS}")
-    print(f"  Models            = {list(model_files.keys())}")
-    print()
+    if model_predictions is None:
+        model_files = {
+            "HAR per-stock":   "test_preds_har.parquet",
+            "HAR pooled":      "test_preds_har_pooled.parquet",
+            "LSTM":            "test_preds_lstm.parquet",
+            "GNN-Correlation": "test_preds_gnn_corr.parquet",
+            "GNN-Sector":      "test_preds_gnn_sector.parquet",
+            "GNN-Granger":     "test_preds_gnn_granger.parquet",
+            "GNN-Ensemble":    "test_preds_gnn_ensemble.parquet",
+        }
+        print(f"  Models            = {list(model_files.keys())}")
+        print()
+        print("Loading prediction files...")
+        pred_dfs: dict[str, pd.DataFrame] = {}
+        for label, fname in model_files.items():
+            path = results_dir / fname
+            df = pd.read_parquet(path)
+            pred_dfs[label] = df.reindex(columns=tickers)
+    else:
+        pred_dfs = {
+            label: df.reindex(columns=tickers)
+            for label, df in model_predictions.items()
+            if label != "Equal-weight"
+        }
+        print(f"  Models            = {list(pred_dfs.keys())}")
+        print()
+        print("Using provided prediction frames...")
 
-    print("Loading prediction files...")
-    pred_dfs: dict[str, pd.DataFrame] = {}
-    for label, fname in model_files.items():
-        path = results_dir / fname
-        df = pd.read_parquet(path)
-        pred_dfs[label] = df.reindex(columns=tickers)
+    if not pred_dfs:
+        raise ValueError("No model predictions were provided for min-var backtests.")
+
+    for label, df in pred_dfs.items():
         nan_frac = pred_dfs[label].isna().values.mean()
         print(f"  {label:<20s}  shape={df.shape}  NaN={nan_frac:.3%}  "
               f"pred_range=[{pred_dfs[label].values[~np.isnan(pred_dfs[label].values)].min():.4f}, "
               f"{pred_dfs[label].values[~np.isnan(pred_dfs[label].values)].max():.4f}]")
 
-    test_weeks = pred_dfs["HAR per-stock"].index
+    test_weeks = next(iter(pred_dfs.values())).index
     weekly_ret = compute_weekly_returns(log_returns_df).reindex(columns=tickers)
     holding_weeks = test_weeks + pd.Timedelta(days=7)
     actual_ret = weekly_ret.reindex(holding_weeks).values
@@ -1005,7 +1056,7 @@ def run_all_model_backtests_minvar(
         pred_arr = pred_df.values.astype(float)
 
         print()
-        print(f"  Model {model_idx+1}/7: {label}")
+        print(f"  Model {model_idx+1}/{len(pred_dfs)}: {label}")
         t0_model = time.perf_counter()
 
         rows: list[dict] = []
@@ -1080,8 +1131,9 @@ def run_all_model_backtests_minvar(
 
     mv_returns_df = pd.concat(all_backtests, ignore_index=True)
 
-    assert len(mv_returns_df) == 7 * n_test, (
-        f"Expected {7 * n_test} rows, got {len(mv_returns_df)}"
+    expected_rows = len(pred_dfs) * n_test
+    assert len(mv_returns_df) == expected_rows, (
+        f"Expected {expected_rows} rows, got {len(mv_returns_df)}"
     )
 
     metrics_table = (
@@ -1091,7 +1143,9 @@ def run_all_model_backtests_minvar(
           "avg_turnover", "max_single_stock_weight"]]
     )
 
-    assert len(metrics_table) == 7, f"Expected 7 model rows, got {len(metrics_table)}"
+    assert len(metrics_table) == len(pred_dfs), (
+        f"Expected {len(pred_dfs)} model rows, got {len(metrics_table)}"
+    )
 
     mv_returns_df.to_parquet(results_dir / "portfolio_mv_returns.parquet", index=False)
     metrics_table.to_csv(results_dir / "portfolio_mv_metrics_table.csv")

@@ -546,6 +546,7 @@ def compute_oversmoothing_audit(
     gnn_rows = registry.loc[
         registry["model_family"].astype(str).str.contains("GNN", case=False, na=False)
         & registry["checkpoint_path"].astype(str).str.strip().ne("")
+        & (registry["feature_version"].astype(str) == "stock_features_v1")
     ]
     for _, row in gnn_rows.iterrows():
         checkpoint = _repo_path(row["checkpoint_path"])
