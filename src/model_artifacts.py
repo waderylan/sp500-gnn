@@ -21,13 +21,14 @@ BASE_FEATURE_VERSION = "stock_features_v1"
 MACRO_FEATURE_VERSION = "stock_features_plus_regime_v1"
 HAR_FEATURE_VERSION = "har_realized_volatility_lags_v1"
 
-MACRO_BASELINE_PAIRS = {
-    "LSTM": "LSTM + Macro",
-    "GNN-Correlation": "GNN-Correlation + Macro",
-    "GNN-Sector": "GNN-Sector + Macro",
-    "GNN-Granger": "GNN-Granger + Macro",
-    "GNN-Ensemble": "GNN-Ensemble + Macro",
-}
+MACRO_BASELINE_PAIRS = [
+    ("LSTM", "LSTM + Macro"),
+    ("GNN-Correlation", "GNN-Correlation + Macro"),
+    ("GNN-Correlation", "GNN-Correlation + Macro Tuned"),
+    ("GNN-Sector", "GNN-Sector + Macro"),
+    ("GNN-Granger", "GNN-Granger + Macro"),
+    ("GNN-Ensemble", "GNN-Ensemble + Macro"),
+]
 
 STEP7_FEATURE_VERSIONS = {
     HAR_FEATURE_VERSION,
@@ -93,13 +94,21 @@ def load_step7_prediction_registry(results_dir: Path | None = None) -> pd.DataFr
         loss_types=None,
         include_har=True,
     )
-    wanted = set(MACRO_BASELINE_PAIRS) | set(MACRO_BASELINE_PAIRS.values()) | {
+    baseline_models = {baseline for baseline, _ in MACRO_BASELINE_PAIRS}
+    macro_models = {macro for _, macro in MACRO_BASELINE_PAIRS}
+    wanted = baseline_models | macro_models | {
         "HAR per-stock",
         "HAR pooled",
     }
     registry = registry.loc[registry["model_name"].isin(wanted)].copy()
+    ordered_models = ["HAR per-stock", "HAR pooled"]
+    for baseline, macro in MACRO_BASELINE_PAIRS:
+        if baseline not in ordered_models:
+            ordered_models.append(baseline)
+        if macro not in ordered_models:
+            ordered_models.append(macro)
     order = {name: i for i, name in enumerate(
-        ["HAR per-stock", "HAR pooled", *MACRO_BASELINE_PAIRS.keys(), *MACRO_BASELINE_PAIRS.values()]
+        ordered_models
     )}
     registry["display_order"] = registry["model_name"].map(order).fillna(999).astype(int)
     return registry.sort_values(["display_order", "model_name"]).reset_index(drop=True)
@@ -187,7 +196,7 @@ def compute_ranking_metrics_table(
 def paired_macro_deltas(table: pd.DataFrame, metrics: Iterable[str]) -> pd.DataFrame:
     """Build paired macro-minus-baseline deltas from a model-indexed table."""
     rows: list[dict[str, object]] = []
-    for baseline, macro in MACRO_BASELINE_PAIRS.items():
+    for baseline, macro in MACRO_BASELINE_PAIRS:
         if baseline not in table.index or macro not in table.index:
             continue
         row: dict[str, object] = {"baseline_model": baseline, "macro_model": macro}

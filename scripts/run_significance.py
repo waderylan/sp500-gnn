@@ -178,7 +178,7 @@ def build_macro_dm_results(weekly_errors: pd.DataFrame) -> pd.DataFrame:
     """Run matched macro-minus-baseline DM tests for step 7."""
     pivot = weekly_errors.pivot(index="week", columns="model", values="weekly_mse").sort_index()
     rows: list[dict[str, object]] = []
-    for baseline, macro in MACRO_BASELINE_PAIRS.items():
+    for baseline, macro in MACRO_BASELINE_PAIRS:
         if baseline not in pivot.columns or macro not in pivot.columns:
             continue
         result = diebold_mariano_test(
@@ -280,7 +280,7 @@ def build_macro_bootstrap_results(
     for path in sorted(results_dir.glob("portfolio*_returns.parquet")):
         strategy = known_by_filename.get(path.name, path.stem.removeprefix("portfolio_").removesuffix("_returns"))
         returns = _pivot_returns(pd.read_parquet(path))
-        for baseline, macro in MACRO_BASELINE_PAIRS.items():
+        for baseline, macro in MACRO_BASELINE_PAIRS:
             if baseline not in returns.columns or macro not in returns.columns:
                 continue
             aligned = returns[[macro, baseline]].dropna()
