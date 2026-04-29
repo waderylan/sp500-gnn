@@ -106,6 +106,7 @@ def train_lstm(
     train_pos: np.ndarray,
     val_pos: np.ndarray,
     device: torch.device,
+    checkpoint_prefix: str = "lstm",
 ) -> tuple[LSTMModel, list[float]]:
     """
     Train the LSTM model with early stopping and periodic checkpointing.
@@ -123,9 +124,11 @@ def train_lstm(
 
     Returns: (best model loaded from checkpoint, val_loss_history per epoch)
 
-    Checkpoints: config.CHECKPOINTS_DIR / "lstm_epoch{n}.pt" every N epochs,
-                 config.CHECKPOINTS_DIR / "lstm_best.pt" on each val improvement.
-    Val loss history: config.DATA_RESULTS_DIR / "lstm_val_loss.json"
+    Checkpoints: config.CHECKPOINTS_DIR / "{checkpoint_prefix}_epoch{n}.pt"
+                 every N epochs, config.CHECKPOINTS_DIR /
+                 "{checkpoint_prefix}_best.pt" on each val improvement.
+    Val loss history: config.DATA_RESULTS_DIR /
+                 "{checkpoint_prefix}_val_loss.json"
 
     Lookahead safety: sequence at position p uses features[p-SEQ_LEN+1:p+1],
     all computed from data through Friday of week p. Target is week p+1's RV.
@@ -135,7 +138,7 @@ def train_lstm(
     seq_len  = config.LSTM_SEQ_LEN
     ckpt_dir = Path(config.CHECKPOINTS_DIR)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    best_path = ckpt_dir / "lstm_best.pt"
+    best_path = ckpt_dir / f"{checkpoint_prefix}_best.pt"
 
     def _valid_positions(pos_arr: np.ndarray) -> list[int]:
         """Keep positions where the preceding sequence window exists.
@@ -215,7 +218,7 @@ def train_lstm(
         print(f"Epoch {epoch + 1:3d}  train={avg_train:.6f}  val={avg_val:.6f}")
 
         if (epoch + 1) % config.CHECKPOINT_EVERY_N_EPOCHS == 0:
-            torch.save(model.state_dict(), ckpt_dir / f"lstm_epoch{epoch + 1}.pt")
+            torch.save(model.state_dict(), ckpt_dir / f"{checkpoint_prefix}_epoch{epoch + 1}.pt")
 
         if avg_val < best_val_loss:
             best_val_loss    = avg_val
@@ -231,7 +234,7 @@ def train_lstm(
 
     results_dir = Path(config.DATA_RESULTS_DIR)
     results_dir.mkdir(parents=True, exist_ok=True)
-    with open(results_dir / "lstm_val_loss.json", "w") as fh:
+    with open(results_dir / f"{checkpoint_prefix}_val_loss.json", "w") as fh:
         json.dump({"val_loss": val_loss_history, "best_val_loss": best_val_loss}, fh, indent=2)
 
     model.load_state_dict(torch.load(best_path, map_location=device))
