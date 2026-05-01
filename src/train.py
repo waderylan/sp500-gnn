@@ -622,12 +622,13 @@ def train_gnn_volatility_granger(
     splits: pd.DataFrame,
     device: torch.device,
     max_epochs: int = config.GNN_MAX_EPOCHS,
+    graph_type: str = "granger_vol",
 ) -> tuple[GNNModel, list[float]]:
     """
     Train an experimental GNN using the static volatility-Granger graph.
 
-    Checkpoint: config.CHECKPOINTS_DIR / "gnn_granger_vol_best.pt"
-    Val loss:   config.DATA_RESULTS_DIR / "gnn_granger_vol_val_loss.json"
+    Checkpoint: config.CHECKPOINTS_DIR / f"gnn_{graph_type}_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / f"gnn_{graph_type}_val_loss.json"
 
     The graph should be built from training-period weekly realized volatility
     using src.graphs.run_volatility_granger_tests() and
@@ -655,7 +656,7 @@ def train_gnn_volatility_granger(
         week_index=week_index,
         edge_index_fn=edge_fn,
         splits=splits,
-        graph_type="granger_vol",
+        graph_type=graph_type,
         device=device,
         max_epochs=max_epochs,
     )
