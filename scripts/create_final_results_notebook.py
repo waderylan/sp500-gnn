@@ -51,6 +51,9 @@ FINAL_ROSTER = [
     "GNN-Granger",
     "GNN-Ensemble",
     "GNN-Correlation + Macro Tuned",
+    "GNN-Correlation + Macro 21d",
+    "GNN-Correlation + Macro 63d",
+    "GNN-Correlation + Macro 126d",
     "GNN-Sector + Macro",
     "GNN-Granger + Macro",
     "GNN-Ensemble + Macro",
@@ -68,6 +71,9 @@ FOCUSED_CALIBRATION_MODELS = [
     "LSTM",
     "GNN-Correlation",
     "GNN-Correlation + Macro Tuned",
+    "GNN-Correlation + Macro 21d",
+    "GNN-Correlation + Macro 63d",
+    "GNN-Correlation + Macro 126d",
     "GNN-Sector + Macro",
     "GNN-Granger + Macro",
 ]
@@ -78,6 +84,9 @@ FOCUSED_PORTFOLIO_MODELS = [
     "LSTM",
     "GNN-Ensemble",
     "GNN-Correlation + Macro Tuned",
+    "GNN-Correlation + Macro 21d",
+    "GNN-Correlation + Macro 63d",
+    "GNN-Correlation + Macro 126d",
     "GNN-Ensemble + Macro",
 ]
 

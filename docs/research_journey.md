@@ -784,3 +784,54 @@ The registry now includes both new experiment IDs:
 - `gnn_granger_vol_macro`
 
 These should be included in future final significance runs if the paper reports volatility-Granger results. Until those significance tests are regenerated, the results above should be treated as point estimates from the current saved predictions, not final statistical claims.
+
+---
+
+## Chapter 22 - Correlation Window Sensitivity
+
+The 252-trading-day correlation graph became a clear limitation after the 2024-2025 test results. A one-year lookback is stable, but it can be too slow to adapt when market structure changes. In the test period, AI-linked stocks and the broader market diverged in ways that made stale 2022-2023 correlations less useful for message passing. To test whether the correlation graph was too sluggish, three shorter lookback windows were promoted into a controlled experiment:
+
+- 21 trading days, roughly one month.
+- 63 trading days, roughly one quarter.
+- 126 trading days, roughly six months.
+
+The experiment was implemented in `notebooks/04e_corr_window_models.ipynb`. The models use the same macro feature tensor, `stock_features_plus_regime_v1`, and the same correlation threshold, `theta=0.3`, but swap the graph version:
+
+- `correlation_threshold_0.3_lookback_21`
+- `correlation_threshold_0.3_lookback_63`
+- `correlation_threshold_0.3_lookback_126`
+
+The new graph files were written under `data/graphs/corr_edges_window/`. The trained model checkpoints and prediction files were registered as:
+
+- `window_gnn_correlation_macro_21`
+- `window_gnn_correlation_macro_63`
+- `window_gnn_correlation_macro_126`
+
+The associated model names in the evaluation tables are:
+
+- `GNN-Correlation + Macro 21d`
+- `GNN-Correlation + Macro 63d`
+- `GNN-Correlation + Macro 126d`
+
+The graph diagnostics supported the original concern. The 21-day graph is the most reactive but also the noisiest. Its validation edge turnover was about 0.337, compared with 0.164 for the 63-day graph and 0.091 for the 126-day graph. The 252-day baseline graph was denser than all three alternatives on validation, with density about 0.664 versus roughly 0.510, 0.461, and 0.514 for the 21-, 63-, and 126-day graphs.
+
+### Test comparison
+
+| Model | Lookback | Test MSE | R2 | DA | Mean Rank IC | ICIR | Inverse-vol Sharpe | Min-var Sharpe |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| GNN-Correlation + Macro Tuned | 252d | 0.030889 | 0.1828 | 0.7197 | 0.4286 | 3.6803 | 0.4251 | 0.6711 |
+| GNN-Correlation + Macro 21d | 21d | 0.029575 | 0.2175 | 0.7283 | 0.4312 | 4.0371 | 0.4275 | 0.6114 |
+| GNN-Correlation + Macro 63d | 63d | 0.032187 | 0.1484 | 0.7215 | 0.4219 | 3.7577 | 0.3980 | 0.2234 |
+| GNN-Correlation + Macro 126d | 126d | 0.031029 | 0.1791 | 0.7184 | 0.4182 | 3.6357 | 0.4117 | 0.2645 |
+
+The 21-day model is the strongest point estimate in this experiment. It has the lowest test MSE, highest R2, highest directional accuracy, highest Rank IC, and highest ICIR among the tested correlation-window models. It also slightly improves inverse-volatility Sharpe relative to the 252-day tuned macro correlation model. The minimum-variance result is different: the 252-day tuned macro correlation model still has the better min-var Sharpe, suggesting that the longer graph may still provide a smoother covariance structure for optimizer-style portfolio construction.
+
+The 63-day and 126-day models did not improve the headline metrics. The 63-day model is close to the frozen GNN-Correlation baseline on MSE but worse than the 252-day tuned macro model and clearly worse than the 21-day window. The 126-day model sits between 21 and 63 days on MSE but does not improve ranking or portfolio metrics.
+
+The DM tests versus frozen `GNN-Correlation` should be treated cautiously. The 21-day model has the largest mean loss improvement, about 0.00262, but the matched DM test does not survive FDR correction. The practical conclusion is therefore not "21 days is statistically proven best." The better interpretation is:
+
+```text
+Shorter correlation windows are worth tuning. The 21-day macro correlation GNN produced the best point estimates so far, supporting the concern that the 252-day graph can be too stale in unstable regimes. However, the current window comparison reused the same macro GNN hyperparameters across all windows, so the result is not a fully fair per-window optimum.
+```
+
+The next step for this branch is to tune each day-window model on its own validation-selected hyperparameters. The first pass should run separate hyperparameter searches for 21d, 63d, and 126d graph versions, using validation metrics only. After that, the best checkpoint from each window can be registered and evaluated in the final notebooks. This matters because the 21-day graph is noisier and may need more regularization, while the longer windows may need different depth, dropout, or learning-rate settings to make use of their smoother graph structure.
