@@ -690,3 +690,97 @@ The latest evidence supports that framing. Macro graph models now lead the point
 - Sector-neutral and ex-sector portfolios remain the next finance robustness checks after mixed loss. The within-sector IC results suggest there is real within-sector signal, but portfolio construction still needs to prove it.
 - The macro feature upgrade improved several final results, but matched macro-vs-baseline DM tests did not survive FDR correction. The paper should report this honestly and avoid claiming universal macro-feature significance.
 - Oversmoothing is measured, especially in dense correlation graphs, but architecture fixes such as DropEdge, residual connections, Jumping Knowledge, and regime-gated GNNs remain future work unless the paper-scope tasks fail.
+
+---
+
+## Chapter 21 — Reframing Granger Edges Around Volatility Spillovers
+
+After the macro-feature results were in place, the Granger graph definition was audited more carefully. The existing Granger graph was built from daily log returns. In the source code, `run_granger_tests()` receives `log_returns`, and `build_granger_graph()` documents the edge semantics as:
+
+```text
+edge A -> B means stock A's past returns Granger-cause stock B's
+```
+
+That graph is not wrong as an information-flow graph, but it is not a direct volatility-spillover graph. The prediction target in this project is next-week realized volatility. Therefore, a paper that describes the original Granger graph as a volatility causality graph would be overstating the construction. A reviewer could reasonably ask why a volatility forecasting paper used return-predictability edges and then interpreted them as volatility spillovers.
+
+To make the graph definition more defensible, a separate target-aligned graph was added rather than replacing the frozen baseline. The new graph uses weekly realized volatility:
+
+```text
+weekly_rv[week T, stock i] = sqrt(sum of daily log return squared during week T)
+```
+
+Then the same ordered-pair Granger F-test is applied over the training period only. The new edge semantics are:
+
+```text
+edge A -> B means stock A's past weekly realized volatility helps predict stock B's weekly realized volatility
+```
+
+This is a cleaner definition for the paper. It directly supports language such as "directed volatility-spillover graph" or "volatility-Granger graph." The old return-based graph should now be described, if referenced, as a return-information-flow graph.
+
+The implementation was intentionally versioned. The frozen return-Granger artifacts remain:
+
+- `data/graphs/granger_pvalues.parquet`
+- `data/graphs/granger_edges.parquet`
+- `data/results/checkpoints/gnn_granger_best.pt`
+
+The new volatility-Granger artifacts are separate:
+
+- `data/graphs/granger_vol_pvalues.parquet`
+- `data/graphs/granger_vol_edges.parquet`
+- `data/graphs/granger_vol_meta.json`
+- `data/results/checkpoints/gnn_granger_vol_best.pt`
+- `data/results/checkpoints/gnn_granger_vol_macro_best.pt`
+- `data/results/test_preds_gnn_granger_vol.parquet`
+- `data/results/test_preds_gnn_granger_vol_macro.parquet`
+
+The volatility-Granger graph produced 26,169 directed edges under Bonferroni correction, compared with 13,886 directed edges for the original return-Granger graph. Its density is about 0.1213. This makes intuitive sense: realized volatility is more persistent and cross-sectionally clustered than raw returns, so more ordered relationships survive multiple-testing correction.
+
+The first result was stock-only:
+
+| Model | Test MSE | Rank IC |
+|---|---:|---:|
+| GNN-Granger | 0.033702 | 0.374945 |
+| GNN-Granger-Volatility | 0.033080 | 0.410440 |
+
+This is a useful improvement. Switching from return-Granger to volatility-Granger improved both point accuracy and cross-sectional ranking in the stock-only setting. It supports the claim that target-aligned graph construction matters.
+
+The macro-feature version was then trained in the same `notebooks/04f_volatility_granger_models.ipynb` notebook, using `stock_features_plus_regime_v1` and the same volatility-Granger edge index:
+
+| Model | Test MSE | Rank IC |
+|---|---:|---:|
+| GNN-Granger + Macro | 0.031439 | 0.429478 |
+| GNN-Granger-Volatility + Macro | 0.031375 | 0.419766 |
+
+With macro features, the volatility-Granger variant is nearly tied with the existing macro Granger model on MSE and slightly better by 0.000064. However, it has lower Rank IC. The broader comparison is:
+
+| Model | Test MSE | Rank IC |
+|---|---:|---:|
+| GNN-Granger-Volatility + Macro | 0.031375 | 0.419766 |
+| GNN-Granger + Macro | 0.031439 | 0.429478 |
+| GNN-Correlation | 0.032191 | 0.416509 |
+| LSTM | 0.032424 | 0.428819 |
+| GNN-Granger-Volatility | 0.033080 | 0.410440 |
+| GNN-Granger | 0.033702 | 0.374945 |
+
+The interpretation is not that volatility-Granger transforms the project. It does not. The important finding is more nuanced:
+
+1. The original return-Granger graph was semantically weaker for a realized-volatility paper.
+2. Replacing it with volatility-Granger improves the stock-only Granger GNN.
+3. Once macro/regime features are added, the exact Granger signal definition matters less for MSE.
+4. Macro/regime context still appears to explain more of the remaining variation than the return-vs-volatility Granger distinction.
+5. The best graph definition can depend on the metric: volatility-Granger + Macro slightly improves MSE, while return-Granger + Macro has better Rank IC.
+
+This should change the paper framing. The paper should avoid claiming that the original Granger graph was a volatility-causality graph. The more defensible wording is:
+
+```text
+We evaluate two directed Granger graph definitions: a return-information-flow graph and a target-aligned volatility-spillover graph. The volatility-spillover graph improves the stock-only Granger GNN, but after adding regime features the two directed graph definitions perform similarly. This suggests that target-aligned graph construction matters, but macro/regime context is the larger driver of the final Granger-model improvement.
+```
+
+This result also supports the central research framing rather than weakening it. Graph structure contains useful cross-sectional volatility information, but the value of a graph depends on how well its edge semantics match the target, the regime context available to the model, and the evaluation objective. The volatility-Granger experiment makes the Granger comparison more auditable and more defensible, even though it does not materially change the headline performance ranking.
+
+The registry now includes both new experiment IDs:
+
+- `gnn_granger_vol`
+- `gnn_granger_vol_macro`
+
+These should be included in future final significance runs if the paper reports volatility-Granger results. Until those significance tests are regenerated, the results above should be treated as point estimates from the current saved predictions, not final statistical claims.
