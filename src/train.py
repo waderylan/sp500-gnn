@@ -614,6 +614,53 @@ def train_gnn_granger(
     )
 
 
+def train_gnn_volatility_granger(
+    features: np.ndarray,
+    target: np.ndarray,
+    week_index: pd.DatetimeIndex,
+    granger_vol_edge_index: torch.LongTensor,
+    splits: pd.DataFrame,
+    device: torch.device,
+    max_epochs: int = config.GNN_MAX_EPOCHS,
+) -> tuple[GNNModel, list[float]]:
+    """
+    Train an experimental GNN using the static volatility-Granger graph.
+
+    Checkpoint: config.CHECKPOINTS_DIR / "gnn_granger_vol_best.pt"
+    Val loss:   config.DATA_RESULTS_DIR / "gnn_granger_vol_val_loss.json"
+
+    The graph should be built from training-period weekly realized volatility
+    using src.graphs.run_volatility_granger_tests() and
+    src.graphs.build_volatility_granger_graph().
+    """
+    assert granger_vol_edge_index.shape[0] == 2, (
+        f"granger_vol_edge_index row dim should be 2, got {granger_vol_edge_index.shape[0]}"
+    )
+    assert granger_vol_edge_index.shape[1] > 0, (
+        "granger_vol_edge_index has no edges - run build_volatility_granger_graph()"
+    )
+
+    in_channels = features.shape[2]
+    set_seeds()
+    model = GNNModel(in_channels=in_channels).to(device)
+
+    edge_fn: Callable[[pd.Timestamp], torch.LongTensor] = (
+        lambda week: granger_vol_edge_index
+    )
+
+    return train_gnn(
+        model=model,
+        features=features,
+        target=target,
+        week_index=week_index,
+        edge_index_fn=edge_fn,
+        splits=splits,
+        graph_type="granger_vol",
+        device=device,
+        max_epochs=max_epochs,
+    )
+
+
 def train_gnn_corr_rankloss(
     features: np.ndarray,
     target: np.ndarray,

@@ -387,6 +387,8 @@ def run_granger_tests_cpu(
     train_end: str = config.TRAIN_END,
     lag: int = config.GRANGER_LAG,
     n_workers: int | None = None,
+    output_filename: str = "granger_pvalues.parquet",
+    series_name: str = "returns",
 ) -> pd.DataFrame:
     """
     Compute Granger causality p-values for all N*(N-1) ordered pairs using CPU multiprocessing.
@@ -414,7 +416,7 @@ def run_granger_tests_cpu(
     n_workers = n_workers or os.cpu_count()
     pairs = [(b, a, lag) for b in range(N) for a in range(N) if a != b]
 
-    print(f"CPU Granger tests: {N} stocks, {T} training days, lag={lag}")
+    print(f"CPU Granger tests ({series_name}): {N} stocks, {T} training rows, lag={lag}")
     print(f"Total pairs: {len(pairs):,}  |  Workers: {n_workers}")
 
     pval_matrix = np.full((N, N), np.nan)
@@ -437,7 +439,7 @@ def run_granger_tests_cpu(
     assert pval_df.shape == (N, N), f"Expected ({N}, {N}), got {pval_df.shape}"
 
     os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
-    out_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_pvalues.parquet")
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, output_filename)
     pval_df.to_parquet(out_path)
     print(f"Saved {pval_df.shape} p-value matrix -> {out_path}")
     return pval_df
@@ -448,6 +450,8 @@ def run_granger_tests_gpu(
     tickers: list[str],
     train_end: str = config.TRAIN_END,
     lag: int = config.GRANGER_LAG,
+    output_filename: str = "granger_pvalues.parquet",
+    series_name: str = "returns",
 ) -> pd.DataFrame:
     """
     Compute Granger causality p-values using GPU-batched OLS in PyTorch (float64).
@@ -498,7 +502,7 @@ def run_granger_tests_gpu(
     df1 = lag                       # restrictions = number of A-lag coefficients
     df2 = T_eff - 2 * lag - 1      # T_eff rows minus (2*lag + 1) unrestricted params
 
-    print(f"GPU Granger tests: {N} stocks, {T} training days, lag={lag}")
+    print(f"GPU Granger tests ({series_name}): {N} stocks, {T} training rows, lag={lag}")
     print(f"T_eff={T_eff}, df1={df1}, df2={df2}, device={torch.cuda.get_device_name(0)}")
 
     device = torch.device("cuda")
@@ -571,7 +575,7 @@ def run_granger_tests_gpu(
     assert pval_df.shape == (N, N), f"Expected ({N}, {N}), got {pval_df.shape}"
 
     os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
-    out_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_pvalues.parquet")
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, output_filename)
     pval_df.to_parquet(out_path)
     print(f"Saved {pval_df.shape} p-value matrix -> {out_path}")
     return pval_df
@@ -584,6 +588,8 @@ def run_granger_tests(
     lag: int = config.GRANGER_LAG,
     use_gpu: bool | None = None,
     n_workers: int | None = None,
+    output_filename: str = "granger_pvalues.parquet",
+    series_name: str = "returns",
 ) -> pd.DataFrame:
     """
     Run Granger causality tests — dispatcher that picks GPU or CPU automatically.
@@ -613,15 +619,80 @@ def run_granger_tests(
 
     if use_gpu:
         print("CUDA detected — using GPU batched OLS (run_granger_tests_gpu).")
-        return run_granger_tests_gpu(log_returns, tickers, train_end, lag)
+        return run_granger_tests_gpu(
+            log_returns,
+            tickers,
+            train_end,
+            lag,
+            output_filename=output_filename,
+            series_name=series_name,
+        )
     else:
         print("No CUDA — using CPU multiprocessing with statsmodels (run_granger_tests_cpu).")
-        return run_granger_tests_cpu(log_returns, tickers, train_end, lag, n_workers)
+        return run_granger_tests_cpu(
+            log_returns,
+            tickers,
+            train_end,
+            lag,
+            n_workers,
+            output_filename=output_filename,
+            series_name=series_name,
+        )
+
+
+def compute_weekly_realized_volatility(log_returns: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert daily log returns to weekly realized volatility ending each Friday.
+
+    weekly_rv[Friday_T, stock] = sqrt(sum of daily squared log returns in week T).
+    This graph input matches the project target family more directly than return
+    predictability: edges mean one stock's past volatility helps forecast another
+    stock's volatility.
+    """
+    weekly_var = (log_returns ** 2).resample("W-FRI").sum(min_count=1)
+    weekly_rv = weekly_var.pow(0.5)
+    weekly_rv = weekly_rv.replace([np.inf, -np.inf], np.nan)
+    return weekly_rv.dropna(how="all")
+
+
+def run_volatility_granger_tests(
+    log_returns: pd.DataFrame,
+    tickers: list[str],
+    train_end: str = config.TRAIN_END,
+    lag: int = config.GRANGER_VOL_LAG,
+    use_gpu: bool | None = None,
+    n_workers: int | None = None,
+) -> pd.DataFrame:
+    """
+    Compute Granger p-values on weekly realized volatility, not daily returns.
+
+    Saves to data/graphs/granger_vol_pvalues.parquet by default. The existing
+    return-Granger artifact data/graphs/granger_pvalues.parquet is not touched.
+    """
+    weekly_rv = compute_weekly_realized_volatility(log_returns)
+    missing = [ticker for ticker in tickers if ticker not in weekly_rv.columns]
+    if missing:
+        raise ValueError(f"weekly_rv missing {len(missing)} tickers, first missing={missing[:5]}")
+
+    return run_granger_tests(
+        weekly_rv[tickers],
+        tickers,
+        train_end=train_end,
+        lag=lag,
+        use_gpu=use_gpu,
+        n_workers=n_workers,
+        output_filename=config.GRANGER_VOL_PVALUES_FILE,
+        series_name="weekly realized volatility",
+    )
 
 
 def build_granger_graph(
     tickers: list[str],
     correction: str = config.GRANGER_CORRECTION,
+    pvalue_filename: str = "granger_pvalues.parquet",
+    edges_filename: str = "granger_edges.parquet",
+    meta_filename: str = "granger_meta.json",
+    signal_label: str = "returns",
 ) -> tuple[torch.LongTensor, str]:
     """
     Build a directed Granger causality edge index from the saved p-value matrix.
@@ -635,7 +706,7 @@ def build_granger_graph(
          (statsmodels multipletests, method='fdr_bh') and log the switch.
     The correction method actually used is returned so callers can document it.
 
-    Edge semantics: edge A -> B means stock A's past returns Granger-cause stock B's.
+    Edge semantics: edge A -> B means stock A's past signal Granger-causes stock B's.
     Row 0 of edge_index = source (cause), row 1 = destination (target).
 
     tickers: Ordered ticker list, length N. Must match the p-value matrix index.
@@ -653,7 +724,7 @@ def build_granger_graph(
     """
     from statsmodels.stats.multitest import multipletests
 
-    pval_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_pvalues.parquet")
+    pval_path = os.path.join(config.DATA_GRAPHS_DIR, pvalue_filename)
     if not os.path.exists(pval_path):
         raise FileNotFoundError(
             f"P-value file not found: {pval_path}\n"
@@ -690,13 +761,18 @@ def build_granger_graph(
         correction_used = "bh"
 
     n_edges = int(reject.sum())
-    print(f"Correction: {correction_used}  |  Edges: {n_edges:,} / {num_pairs:,} pairs")
+    print(
+        f"Correction: {correction_used}  |  Signal: {signal_label}  |  "
+        f"Edges: {n_edges:,} / {num_pairs:,} pairs"
+    )
 
-    meta_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_meta.json")
+    meta_path = os.path.join(config.DATA_GRAPHS_DIR, meta_filename)
     os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
     with open(meta_path, "w") as _fh:
         json.dump({"correction_used": correction_used, "n_edges": n_edges,
-                   "n_pairs": num_pairs}, _fh, indent=2)
+                   "n_pairs": num_pairs, "signal_label": signal_label,
+                   "pvalue_file": pvalue_filename, "edges_file": edges_filename},
+                  _fh, indent=2)
 
     # pval_matrix[b, a] = P(A does NOT Granger-cause B), so src_all=row=B=target,
     # dst_all=col=A=cause. Edge semantics: cause A -> target B, so cause goes in row 0.
@@ -715,12 +791,33 @@ def build_granger_graph(
         "src": src_edges.astype("int32"),
         "dst": dst_edges.astype("int32"),
     })
-    out_path = os.path.join(config.DATA_GRAPHS_DIR, "granger_edges.parquet")
+    out_path = os.path.join(config.DATA_GRAPHS_DIR, edges_filename)
     os.makedirs(config.DATA_GRAPHS_DIR, exist_ok=True)
     edges_df.to_parquet(out_path, index=False)
     print(f"Saved {n_edges:,} directed edges -> {out_path}")
 
     return edge_index, correction_used
+
+
+def build_volatility_granger_graph(
+    tickers: list[str],
+    correction: str = config.GRANGER_CORRECTION,
+) -> tuple[torch.LongTensor, str]:
+    """
+    Build a directed Granger graph from weekly realized-volatility p-values.
+
+    This reads data/graphs/granger_vol_pvalues.parquet and writes
+    data/graphs/granger_vol_edges.parquet plus granger_vol_meta.json. It leaves
+    the existing return-Granger artifacts unchanged.
+    """
+    return build_granger_graph(
+        tickers=tickers,
+        correction=correction,
+        pvalue_filename=config.GRANGER_VOL_PVALUES_FILE,
+        edges_filename=config.GRANGER_VOL_EDGES_FILE,
+        meta_filename=config.GRANGER_VOL_META_FILE,
+        signal_label="weekly realized volatility",
+    )
 
 
 # ── PyG Data helper ───────────────────────────────────────────────────────────

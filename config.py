@@ -53,6 +53,10 @@ CORR_SAMPLE_DATES = {
 GRANGER_LAG        = 5              # number of lags for Granger causality F-test
 GRANGER_CORRECTION = "bonferroni"   # "bonferroni" or "bh"; updated after ablation
 GRANGER_MIN_EDGES  = 500            # fall back to BH if Bonferroni yields fewer edges
+GRANGER_VOL_LAG    = 5              # weekly RV lags for volatility Granger tests
+GRANGER_VOL_PVALUES_FILE = "granger_vol_pvalues.parquet"
+GRANGER_VOL_EDGES_FILE   = "granger_vol_edges.parquet"
+GRANGER_VOL_META_FILE    = "granger_vol_meta.json"
 
 # GNN architecture
 SAGE_FLOW  = "source_to_target"     # SAGEConv flow direction; critical for Granger directionality
