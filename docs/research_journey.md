@@ -475,7 +475,7 @@ The frozen roster contains 10 models:
 
 This freeze changed the psychology of the project. Before the snapshot, every rerun carried some risk of silently changing the story. After the snapshot, later feature experiments could be treated as additions rather than replacements. The baseline could be wrong, imperfect, or incomplete, but it was at least fixed.
 
-The experiment registry was added at `data/results/experiment_registry.csv`. It now has 16 rows: the 10 frozen baseline/rank-loss models, LSTM + Macro, three macro GNNs, the macro ensemble, and the tuned macro GNN-Correlation. Each row records the experiment id, model family, graph type, loss type, feature version, graph version, checkpoint path, and metric/prediction artifacts. This is the first time the project had a single machine-readable provenance table instead of provenance spread across notebooks, JSON files, checkpoint names, and memory.
+The experiment registry was added at `data/results/experiment_registry.csv`. It now has 16 rows: the 10 frozen baseline/rank-loss models, LSTM + Macro, three macro GNNs, the macro ensemble, and the 252-day tuned macro GNN-Correlation. Each row records the experiment id, model family, graph type, loss type, feature version, graph version, checkpoint path, and metric/prediction artifacts. This is the first time the project had a single machine-readable provenance table instead of provenance spread across notebooks, JSON files, checkpoint names, and memory.
 
 The important design choice: the registry is explicit, not magic. New models are not auto-discovered just because a checkpoint exists. That is intentional. If a model matters enough to compare, it needs a row with its feature version, graph version, loss type, and artifact paths. This makes the registry slightly more manual, but much safer for a research codebase where accidental files should not become paper results.
 
@@ -521,7 +521,7 @@ The initial significance artifacts are:
 - `data/results/significance_summary.csv`
 - `data/results/weekly_model_errors.parquet`
 
-The final significance pass found only a narrow set of statistically supportable MSE claims. In `dm_test_results.csv`, the tuned macro correlation GNN is FDR-significant versus HAR per-stock (`p_bh=0.0112`) and HAR pooled (`p_bh=0.0033`). The matched macro-vs-baseline comparisons did not survive FDR correction; the best adjusted p-value was about 0.200. This is an important constraint on the paper story. Macro features improved several point estimates, but the formal tests do not support saying every macro upgrade significantly improved its matched baseline.
+The final significance pass found only a narrow set of statistically supportable MSE claims. In `dm_test_results.csv`, the 252-day tuned macro correlation GNN is FDR-significant versus HAR per-stock (`p_bh=0.0112`) and HAR pooled (`p_bh=0.0033`). The matched macro-vs-baseline comparisons did not survive FDR correction; the best adjusted p-value was about 0.200. This is an important constraint on the paper story. Macro features improved several point estimates, but the formal tests do not support saying every macro upgrade significantly improved its matched baseline.
 
 The bootstrap portfolio result is similarly cautionary. The final summary reports 0 positive Sharpe-difference intervals for the broad baseline/final comparisons, but 7 positive intervals among 24 matched macro Sharpe-difference intervals. Translation: the return side has some encouraging macro-feature evidence, especially in portfolio variants, but it is not a blanket win across every comparison.
 
@@ -608,13 +608,13 @@ The first macro training result was mixed. LSTM + Macro had the best validation 
 
 Because the initial untuned GNN-Correlation + Macro underperformed, a macro-specific GNN-Correlation hyperparameter search was run. This was the right choice methodologically: macro features changed the input dimension and feature distribution, so blindly reusing the baseline GNN architecture would not be a fair test.
 
-The macro search wrote 48 validation-loss JSON files and the aggregate `data/results/gnn_corr_macro_hparam_search_results.json`. The selected tuned macro correlation model was registered as `macro_gnn_correlation_hparam` and saved as `GNN-Correlation + Macro Tuned`.
+The macro search wrote 48 validation-loss JSON files and the aggregate `data/results/gnn_corr_macro_hparam_search_results.json`. The selected 252-day tuned macro correlation model was registered as `macro_gnn_correlation_hparam` and saved as `GNN-Correlation + Macro 252d Tuned`.
 
 The final ML table changed the project story:
 
 | Model | Test MSE | DA |
 |---|---:|---:|
-| GNN-Correlation + Macro Tuned | 0.030889 | 0.7197 |
+| GNN-Correlation + Macro 252d Tuned | 0.030889 | 0.7197 |
 | GNN-Granger + Macro | 0.031439 | 0.7136 |
 | GNN-Sector + Macro | 0.031508 | 0.7043 |
 | GNN-Ensemble + Macro | 0.031598 | 0.7148 |
@@ -623,9 +623,9 @@ The final ML table changed the project story:
 | LSTM | 0.032424 | 0.7088 |
 | HAR per-stock | 0.032858 | 0.7070 |
 
-The tuned macro correlation GNN is now the best point-forecast model in the table. It improves over the frozen GNN-Correlation by about 0.00130 MSE and over HAR per-stock by about 0.00197 MSE. That second comparison survives the final DM/FDR test. The matched macro-vs-baseline improvement does not survive FDR correction, so the honest wording is: the tuned macro GNN is significantly better than HAR baselines in the final table, but the macro upgrade itself is not statistically significant across matched model pairs after FDR correction.
+The 252-day tuned macro correlation GNN is now the best point-forecast model in the table. It improves over the frozen GNN-Correlation by about 0.00130 MSE and over HAR per-stock by about 0.00197 MSE. That second comparison survives the final DM/FDR test. The matched macro-vs-baseline improvement does not survive FDR correction, so the honest wording is: the 252-day tuned macro GNN is significantly better than HAR baselines in the final table, but the macro upgrade itself is not statistically significant across matched model pairs after FDR correction.
 
-Rank IC also improved. The best overall Rank IC is the macro ensemble at 0.4378, followed by GNN-Granger + Macro at 0.4295, LSTM at 0.4288, and GNN-Correlation + Macro Tuned at 0.4286. This is a subtle but important result. The best MSE model is not the best ranking model. The macro ensemble is the best cross-sectional ranker, while the tuned macro correlation GNN is the best point forecaster.
+Rank IC also improved. The best overall Rank IC is the macro ensemble at 0.4378, followed by GNN-Granger + Macro at 0.4295, LSTM at 0.4288, and GNN-Correlation + Macro 252d Tuned at 0.4286. This is a subtle but important result. The best MSE model is not the best ranking model. The macro ensemble is the best cross-sectional ranker, while the 252-day tuned macro correlation GNN is the best point forecaster.
 
 The macro portfolio results were stronger than the ML significance story. In inverse-volatility portfolios, equal-weight still wins with Sharpe 0.513, but macro GNNs moved closer:
 
@@ -635,7 +635,7 @@ The macro portfolio results were stronger than the ML significance story. In inv
 | GNN-Sector + Macro | 0.468 |
 | GNN-Ensemble + Macro | 0.465 |
 | GNN-Granger + Macro | 0.456 |
-| GNN-Correlation + Macro Tuned | 0.425 |
+| GNN-Correlation + Macro 252d Tuned | 0.425 |
 | GNN-Granger | 0.423 |
 
 In minimum-variance portfolios, the macro graph models became much more interesting:
@@ -646,12 +646,12 @@ In minimum-variance portfolios, the macro graph models became much more interest
 | GNN-Granger + Macro | 0.973 |
 | GNN-Ensemble + Macro | 0.914 |
 | HAR pooled | 0.729 |
-| GNN-Correlation + Macro Tuned | 0.671 |
+| GNN-Correlation + Macro 252d Tuned | 0.671 |
 | HAR per-stock | 0.635 |
 
 This is one of the more important findings so far. The macro features appear especially useful when the portfolio construction uses both predicted volatility and covariance structure. Sector and Granger macro models do not win the point-forecast table, but they dominate minimum-variance Sharpe. This supports the project's central framing: graph value depends on the objective and the portfolio construction, not just MSE.
 
-The macro calibration table also shows why different models win different downstream tasks. GNN-Correlation + Macro Tuned has the highest Pearson correlation with actual RV among the final models (0.4495) and a wider prediction std (0.1138), but its calibration slope is 0.768. GNN-Granger + Macro and GNN-Ensemble + Macro have higher slopes around 1.48 and 1.44 but narrower prediction std around 0.058. These are not interchangeable forecasts. The optimizer sees different covariance diagonals even when MSEs are close.
+The macro calibration table also shows why different models win different downstream tasks. GNN-Correlation + Macro 252d Tuned has the highest Pearson correlation with actual RV among the final models (0.4495) and a wider prediction std (0.1138), but its calibration slope is 0.768. GNN-Granger + Macro and GNN-Ensemble + Macro have higher slopes around 1.48 and 1.44 but narrower prediction std around 0.058. These are not interchangeable forecasts. The optimizer sees different covariance diagonals even when MSEs are close.
 
 ---
 
@@ -819,7 +819,7 @@ The graph diagnostics supported the original concern. The 21-day graph is the mo
 
 | Model | Lookback | Test MSE | R2 | DA | Mean Rank IC | ICIR | Inverse-vol Sharpe | Min-var Sharpe |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| GNN-Correlation + Macro Tuned | 252d | 0.030889 | 0.1828 | 0.7197 | 0.4286 | 3.6803 | 0.4251 | 0.6711 |
+| GNN-Correlation + Macro 252d Tuned | 252d | 0.030889 | 0.1828 | 0.7197 | 0.4286 | 3.6803 | 0.4251 | 0.6711 |
 | GNN-Correlation + Macro 21d | 21d | 0.029575 | 0.2175 | 0.7283 | 0.4312 | 4.0371 | 0.4275 | 0.6114 |
 | GNN-Correlation + Macro 63d | 63d | 0.032187 | 0.1484 | 0.7215 | 0.4219 | 3.7577 | 0.3980 | 0.2234 |
 | GNN-Correlation + Macro 126d | 126d | 0.031029 | 0.1791 | 0.7184 | 0.4182 | 3.6357 | 0.4117 | 0.2645 |
@@ -835,3 +835,100 @@ Shorter correlation windows are worth tuning. The 21-day macro correlation GNN p
 ```
 
 The next step for this branch is to tune each day-window model on its own validation-selected hyperparameters. The first pass should run separate hyperparameter searches for 21d, 63d, and 126d graph versions, using validation metrics only. After that, the best checkpoint from each window can be registered and evaluated in the final notebooks. This matters because the 21-day graph is noisier and may need more regularization, while the longer windows may need different depth, dropout, or learning-rate settings to make use of their smoother graph structure.
+
+---
+
+## Chapter 23 - Dynamic Correlation Window Hyperparameter Search
+
+After the first correlation-window sensitivity test, the next question was whether each shorter dynamic graph window needed its own architecture and regularization. The earlier comparison reused the 252-day tuned macro correlation GNN settings, which was useful as a controlled first pass but not a fully fair per-window optimum.
+
+A validation-only hyperparameter search was run in `notebooks/04b_gnn_hparam_search_multi_windows.ipynb` for the macro GNN-Correlation models with 21-, 63-, and 126-trading-day correlation graph lookbacks. The search kept the macro feature set fixed at `stock_features_plus_regime_v1`, kept the correlation threshold fixed at `theta=0.3`, and selected by validation MSE only. Each shorter-window model completed 64 configurations. The 252-day tuned macro correlation model is included below as the reference search.
+
+| Lookback | Search scope | Completed configs | Best validation MSE | Best config idx | LR | Hidden dim | Dropout | BatchNorm | Layers |
+|---:|---|---:|---:|---:|---:|---:|---:|---|---:|
+| 21d | window-specific tuned | 64 / 64 | 0.019641 | 39 | 0.0010 | 256 | 0.1 | True | 3 |
+| 63d | window-specific tuned | 64 / 64 | 0.019778 | 18 | 0.0003 | 256 | 0.3 | True | 2 |
+| 126d | window-specific tuned | 64 / 64 | 0.019590 | 52 | 0.0003 | 256 | 0.2 | True | 3 |
+| 252d | 252-day macro reference | 48 / 48 | 0.019625 | 19 | 0.0003 | 256 | 0.3 | True | 3 |
+
+The 126-day window had the lowest validation MSE among the tuned shorter-window models and also slightly beat the 252-day macro reference on validation MSE. The margin is small: 126d reached `0.019590` versus `0.019625` for 252d. This changes the interpretation from the first untuned window comparison. The 21-day graph looked best on initial test point estimates when all windows reused the same macro GNN settings, but after per-window validation tuning, the validation-selected winner is the 126-day graph, not the 21-day graph.
+
+The tuned runs were saved as separate artifacts rather than replacing the earlier window models:
+
+- `window_gnn_correlation_macro_21_hparam`
+- `window_gnn_correlation_macro_63_hparam`
+- `window_gnn_correlation_macro_126_hparam`
+
+The corresponding checkpoints and predictions are:
+
+- `data/results/checkpoints/gnn_corr_macro_w021_hparam_best.pt`
+- `data/results/checkpoints/gnn_corr_macro_w063_hparam_best.pt`
+- `data/results/checkpoints/gnn_corr_macro_w126_hparam_best.pt`
+- `data/results/test_preds_gnn_corr_macro_w021_hparam.parquet`
+- `data/results/test_preds_gnn_corr_macro_w063_hparam.parquet`
+- `data/results/test_preds_gnn_corr_macro_w126_hparam.parquet`
+
+A checkpoint sanity check on validation week `2023-06-26` succeeded for all three tuned models, with output shape `(465,)` and zero NaN predictions.
+
+These are validation-selection results, not final test claims. The downstream evaluation tables in the current saved artifacts still primarily reflect the earlier non-hparam window models. The next step is to regenerate ML metrics, Rank IC, calibration, portfolio metrics, and significance tests with the three `_hparam` prediction files included, then decide whether the 126-day validation winner also holds up on test and portfolio evidence.
+
+---
+
+## Chapter 24 - Final Trained Model Roster And Overall Results
+
+The model-training roster is now frozen for the current paper draft. The final evaluation notebooks include the baseline HAR/LSTM models, the original stock-feature GNNs, macro/regime-feature GNNs, `GNN-Correlation + Macro 252d Tuned`, and the per-window tuned dynamic correlation GNNs. The earlier shared-hyperparameter 21d/63d/126d window runs are retained as ablation artifacts but removed from the final headline model roster because they duplicate the later per-window tuning experiment.
+
+The final result notebooks are:
+
+- `notebooks/05_evaluate.ipynb` for point-forecast metrics, Rank IC, calibration, and diagnostic tables.
+- `notebooks/06_portfolio.ipynb` for inverse-volatility and optimizer-based portfolio results.
+- `notebooks/07_significance.ipynb` for weekly-error DM tests and block-bootstrap Sharpe intervals.
+
+The table below combines the key results currently visible in those notebooks. It is sorted by test MSE. `Inv-vol Sharpe` is the long-only inverse-volatility portfolio, while `Min-var Sharpe` is the minimum-variance portfolio using each model's predicted volatility as the covariance diagonal.
+
+| Model | MSE | R2 | DA | Rank IC | ICIR | Inv-vol Sharpe | Min-var Sharpe |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| GNN-Correlation + Macro 63d Tuned | 0.0298 | 0.2104 | 0.7217 | 0.4260 | 3.6569 | 0.4292 | 0.7945 |
+| GNN-Correlation + Macro 252d Tuned | 0.0309 | 0.1828 | 0.7197 | 0.4286 | 3.6803 | 0.4251 | 0.6711 |
+| GNN-Correlation + Macro 21d Tuned | 0.0311 | 0.1771 | 0.7250 | 0.4120 | 3.9145 | 0.4511 | 0.8284 |
+| GNN-Granger + Macro | 0.0314 | 0.1682 | 0.7136 | 0.4295 | 4.0642 | 0.4561 | 0.9726 |
+| GNN-Sector + Macro | 0.0315 | 0.1664 | 0.7043 | 0.4278 | 3.8502 | 0.4681 | 0.9838 |
+| GNN-Ensemble + Macro | 0.0316 | 0.1640 | 0.7148 | 0.4378 | 3.9349 | 0.4647 | 0.9142 |
+| GNN-Ensemble | 0.0320 | 0.1531 | 0.7004 | 0.4162 | 3.5769 | 0.4168 | 0.4977 |
+| GNN-Correlation + Macro 126d Tuned | 0.0321 | 0.1501 | 0.7185 | 0.4146 | 3.5246 | 0.4152 | 0.3895 |
+| GNN-Correlation | 0.0322 | 0.1484 | 0.7122 | 0.4165 | 3.4399 | 0.3869 | 0.5814 |
+| LSTM | 0.0324 | 0.1422 | 0.7088 | 0.4288 | 4.3626 | 0.4111 | 0.5637 |
+| HAR per-stock | 0.0329 | 0.1307 | 0.7070 | 0.4049 | 3.4728 | 0.3956 | 0.6346 |
+| HAR pooled | 0.0331 | 0.1242 | 0.7030 | 0.3923 | 3.4370 | 0.4060 | 0.7289 |
+| GNN-Correlation + Macro | 0.0334 | 0.1168 | 0.7164 | 0.4316 | 3.8650 | 0.4591 | 0.6849 |
+| GNN-Sector | 0.0336 | 0.1102 | 0.6822 | 0.3826 | 3.3994 | 0.4097 | 0.4918 |
+| GNN-Granger | 0.0337 | 0.1084 | 0.6879 | 0.3749 | 3.6630 | 0.4234 | 0.4119 |
+| LSTM + Macro | 0.0348 | 0.0781 | 0.6736 | 0.4470 | 4.2167 | 0.4156 | 0.7021 |
+
+### Main winners by metric
+
+The strongest point forecaster in the final roster is `GNN-Correlation + Macro 63d Tuned`, with test MSE `0.0298` and R2 `0.2104`. This supports the dynamic-window result: the original 252-day correlation graph was too slow to adapt in the 2024-2025 test regime, and a shorter tuned graph improved point forecasts.
+
+The strongest ranker is `LSTM + Macro`, with mean Rank IC `0.4470`. This separates point-forecast quality from cross-sectional ranking quality. The macro ensemble is the best GNN ranker, with Rank IC `0.4378`, followed by macro Granger at `0.4295` and `GNN-Correlation + Macro 252d Tuned` at `0.4286`.
+
+The best inverse-volatility portfolio among forecast models is `GNN-Sector + Macro`, with Sharpe `0.4681`. `GNN-Ensemble + Macro` and the untuned macro correlation model are close, at `0.4647` and `0.4591`. The equal-weight benchmark remains stronger in the inverse-volatility notebook, with Sharpe about `0.5132`, so the long-only inverse-volatility result should not be framed as an economic victory over equal weight.
+
+The best minimum-variance portfolio is also `GNN-Sector + Macro`, with Sharpe `0.9838`, followed by `GNN-Granger + Macro` at `0.9726` and `GNN-Ensemble + Macro` at `0.9142`. This is the strongest portfolio evidence for the macro GNN family, but it should still be reported with bootstrap uncertainty because the test window has only 103 weekly observations.
+
+### Dynamic-window conclusion
+
+The final dynamic-window comparison should use only the per-window tuned models plus the 252-day tuned macro reference. On that basis, the 63-day tuned model is the best correlation-window model for point forecasting. The 21-day tuned model has the best directional accuracy among the tuned correlation windows and stronger portfolio Sharpe than the 63-day tuned model. The 126-day tuned model was selected by validation MSE but did not hold up as the best test model.
+
+This means the paper should not say that one lookback window is universally optimal. The defensible conclusion is that shortening the correlation graph lookback improved regime responsiveness, but the preferred window depends on whether the target is point accuracy, directional accuracy, ranking, or portfolio construction.
+
+### Significance interpretation
+
+The matched macro-vs-baseline DM tests do not produce FDR-significant improvements after Benjamini-Hochberg correction. The smallest raw p-value is for `GNN-Granger + Macro` versus `GNN-Granger` (`p=0.0333`), but its BH-adjusted p-value is `0.2849`. The tuned 63-day macro correlation model improves mean weekly loss versus frozen `GNN-Correlation`, but its BH-adjusted p-value is also `0.2849`.
+
+This should shape the final paper language. The results support a measured claim:
+
+```text
+Macro/regime features and more responsive graph construction improve several point estimates and portfolio outcomes, especially for correlation and sector GNNs, but the final statistical tests do not support a blanket claim of statistically significant GNN dominance across all baselines.
+```
+
+The final narrative should emphasize conditional graph value: graph structure helps when the graph is aligned with the regime, objective, and portfolio construction method. The evidence is strongest for point-forecast improvement from a tuned shorter correlation window and for macro GNNs in minimum-variance portfolios. The evidence is weaker for unconditional superiority over LSTM or equal-weight portfolio baselines.
